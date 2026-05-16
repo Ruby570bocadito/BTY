@@ -1097,10 +1097,10 @@ func (a *Agent) persistDarwinLaunchAgent(exePath, serverAddr string) {
 }
 
 func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
+	return len(s) >= len(substr) && searchStr(s, substr)
 }
 
-func searchString(s, substr string) bool {
+func searchStr(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true
