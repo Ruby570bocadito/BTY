@@ -1,0 +1,62 @@
+# Binaries
+bty-server
+bty-agent
+*.exe
+*.elf
+*.macho
+dist/bty-agent-*
+
+# Runtime
+*.db
+data/
+bty.db
+
+# Logs
+*.log
+server.log
+server.err
+
+# Payloads
+payloads/*
+!payloads/.gitkeep
+
+# Certificates (sensitive)
+certs/
+*.crt
+*.key
+*.pem
+
+# Node
+web/node_modules/
+web/.vite/
+web/dist/
+
+# Python
+scripts/__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Go
+src/go/build/
+src/go/go.sum
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Operations (sensitive)
+loot/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# Test artifacts
+tests/__pycache__/
+*.coverage

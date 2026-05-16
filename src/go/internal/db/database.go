@@ -1,0 +1,477 @@
+package db
+
+import (
+	"crypto/rand"
+	"database/sql"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	_ "modernc.org/sqlite"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// DB wraps the SQLite database connection with thread-safe access.
+type DB struct {
+	conn *sql.DB
+	mu   sync.RWMutex
+}
+
+// SessionRecord represents a stored session.
+type SessionRecord struct {
+	ID         string
+	AgentID    string
+	Hostname   string
+	OS         string
+	Arch       string
+	Username   string
+	IsAdmin    bool
+	PublicIP   string
+	LocalIP    string
+	MACAddr    string
+	FirstSeen  time.Time
+	LastSeen   time.Time
+	State      string
+	TaskCount  int
+}
+
+// TaskRecord represents a stored task.
+type TaskRecord struct {
+	ID         string
+	SessionID  string
+	Command    string
+	Output     string
+	ExitCode   int
+	Success    bool
+	IssuedAt   time.Time
+	CompletedAt *time.Time
+}
+
+// OperatorRecord represents a C2 operator.
+type OperatorRecord struct {
+	ID           int
+	Username     string
+	PasswordHash string
+	Role         string
+	CreatedAt    time.Time
+}
+
+// Open opens (or creates) a SQLite database at the given path.
+func Open(dsn string) (*DB, error) {
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+
+	// WAL mode for better concurrent read performance
+	// SQLite supports multiple readers with WAL, single writer
+	conn.SetMaxOpenConns(4)  // Allow limited concurrency for reads
+	conn.SetMaxIdleConns(2)  // Keep some connections warm
+	conn.SetConnMaxLifetime(30 * time.Minute)
+
+	db := &DB{conn: conn}
+
+	// Enable WAL mode and other performance optimizations
+	if err := db.configureSQLite(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("configure sqlite: %w", err)
+	}
+
+	// Run migrations instead of direct schema creation
+	if err := db.Migrate(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	return db, nil
+}
+
+// configureSQLite enables WAL mode and other optimizations.
+func (d *DB) configureSQLite() error {
+	pragmas := []string{
+		`PRAGMA journal_mode=WAL`,              // Write-Ahead Logging for concurrent reads
+		`PRAGMA synchronous=NORMAL`,            // Faster writes, still safe with WAL
+		`PRAGMA cache_size=-64000`,             // 64MB cache (negative = KB)
+		`PRAGMA temp_store=MEMORY`,             // Temp tables in memory
+		`PRAGMA mmap_size=268435456`,           // 256MB memory-mapped I/O
+		`PRAGMA foreign_keys=ON`,               // Enforce foreign key constraints
+		`PRAGMA busy_timeout=5000`,             // Wait 5s for locks instead of failing
+		`PRAGMA wal_autocheckpoint=1000`,       // Auto-checkpoint every 1000 pages
+	}
+
+	for _, pragma := range pragmas {
+		if _, err := d.conn.Exec(pragma); err != nil {
+			log.Printf("[DB] Warning: failed to set %s: %v", pragma, err)
+		}
+	}
+
+	return nil
+}
+
+func (d *DB) Close() error {
+	return d.conn.Close()
+}
+
+// --- Session operations ---
+
+// UpsertSession creates or updates a session record.
+func (d *DB) UpsertSession(s *SessionRecord) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`
+		INSERT INTO sessions (id, agent_id, hostname, os, arch, username, is_admin, public_ip, local_ip, mac_address, last_seen, state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			hostname=excluded.hostname, os=excluded.os, arch=excluded.arch,
+			username=excluded.username, is_admin=excluded.is_admin,
+			public_ip=excluded.public_ip, local_ip=excluded.local_ip,
+			mac_address=excluded.mac_address, last_seen=excluded.last_seen,
+			state=excluded.state`,
+		s.ID, s.AgentID, s.Hostname, s.OS, s.Arch, s.Username,
+		boolToInt(s.IsAdmin), s.PublicIP, s.LocalIP, s.MACAddr,
+		s.LastSeen, s.State,
+	)
+	return err
+}
+
+// UpdateSessionState updates the state of a session.
+func (d *DB) UpdateSessionState(id, state string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.conn.Exec(`UPDATE sessions SET state=?, last_seen=? WHERE id=?`,
+		state, time.Now(), id)
+	return err
+}
+
+// UpdateSessionLastSeen bumps the last_seen timestamp.
+func (d *DB) UpdateSessionLastSeen(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.conn.Exec(`UPDATE sessions SET last_seen=? WHERE id=?`,
+		time.Now(), id)
+	return err
+}
+
+// GetSession retrieves a session by ID.
+func (d *DB) GetSession(id string) (*SessionRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	s := &SessionRecord{}
+	var isAdmin int
+	err := d.conn.QueryRow(`
+		SELECT id, agent_id, hostname, os, arch, username, is_admin,
+			   public_ip, local_ip, mac_address, first_seen, last_seen, state
+		FROM sessions WHERE id=?`, id).Scan(
+		&s.ID, &s.AgentID, &s.Hostname, &s.OS, &s.Arch, &s.Username,
+		&isAdmin, &s.PublicIP, &s.LocalIP, &s.MACAddr,
+		&s.FirstSeen, &s.LastSeen, &s.State,
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.IsAdmin = isAdmin != 0
+	return s, nil
+}
+
+// GetSessionByAgentID retrieves a session by agent ID.
+func (d *DB) GetSessionByAgentID(agentID string) (*SessionRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	s := &SessionRecord{}
+	var isAdmin int
+	err := d.conn.QueryRow(`
+		SELECT id, agent_id, hostname, os, arch, username, is_admin,
+			   public_ip, local_ip, mac_address, first_seen, last_seen, state
+		FROM sessions WHERE agent_id=?`, agentID).Scan(
+		&s.ID, &s.AgentID, &s.Hostname, &s.OS, &s.Arch, &s.Username,
+		&isAdmin, &s.PublicIP, &s.LocalIP, &s.MACAddr,
+		&s.FirstSeen, &s.LastSeen, &s.State,
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.IsAdmin = isAdmin != 0
+	return s, nil
+}
+
+// ListActiveSessions returns all sessions that are not dead.
+func (d *DB) ListActiveSessions() ([]SessionRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, agent_id, hostname, os, arch, username, is_admin,
+			   public_ip, local_ip, mac_address, first_seen, last_seen, state,
+			   (SELECT COUNT(*) FROM tasks WHERE session_id=sessions.id) as task_count
+		FROM sessions WHERE state != 'dead' ORDER BY last_seen DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSessions(rows)
+}
+
+// ListAllSessions returns all sessions ever.
+func (d *DB) ListAllSessions() ([]SessionRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, agent_id, hostname, os, arch, username, is_admin,
+			   public_ip, local_ip, mac_address, first_seen, last_seen, state,
+			   (SELECT COUNT(*) FROM tasks WHERE session_id=sessions.id)
+		FROM sessions ORDER BY last_seen DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSessions(rows)
+}
+
+// DeleteSession removes a session and its tasks.
+func (d *DB) DeleteSession(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM tasks WHERE session_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// --- Task operations ---
+
+// InsertTask creates a new task record.
+func (d *DB) InsertTask(t *TaskRecord) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`
+		INSERT INTO tasks (id, session_id, command, output, exit_code, success, issued_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.SessionID, t.Command, t.Output, t.ExitCode, boolToInt(t.Success),
+		t.IssuedAt, t.CompletedAt,
+	)
+	return err
+}
+
+// UpdateTaskResult updates a task with its result.
+func (d *DB) UpdateTaskResult(id, output string, exitCode int, success bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := time.Now()
+	_, err := d.conn.Exec(`
+		UPDATE tasks SET output=?, exit_code=?, success=?, completed_at=? WHERE id=?`,
+		output, exitCode, boolToInt(success), now, id,
+	)
+	return err
+}
+
+// GetSessionTasks returns all tasks for a session.
+func (d *DB) GetSessionTasks(sessionID string) ([]TaskRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, session_id, command, output, exit_code, success, issued_at, completed_at
+		FROM tasks WHERE session_id=? ORDER BY issued_at DESC LIMIT 100`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanTasks(rows)
+}
+
+// --- Operator operations ---
+
+// CreateOperator creates a new operator with bcrypt-hashed password.
+func (d *DB) CreateOperator(username, password, role string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	_, err = d.conn.Exec(`INSERT INTO operators (username, password_hash, role) VALUES (?, ?, ?)`,
+		username, string(hash), role)
+	return err
+}
+
+// CreateOperatorWithHash creates a new operator with a pre-hashed password.
+func (d *DB) CreateOperatorWithHash(username, passwordHash, role string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(passwordHash) < 59 || (passwordHash[:4] != "$2a$" && passwordHash[:4] != "$2b$") {
+		return fmt.Errorf("invalid bcrypt hash format")
+	}
+
+	_, err := d.conn.Exec(`INSERT INTO operators (username, password_hash, role) VALUES (?, ?, ?)`,
+		username, passwordHash, role)
+	return err
+}
+
+// AuthenticateOperator verifies operator credentials.
+func (d *DB) AuthenticateOperator(username, password string) (*OperatorRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	op := &OperatorRecord{}
+	err := d.conn.QueryRow(`
+		SELECT id, username, password_hash, role, created_at
+		FROM operators WHERE username=?`, username).Scan(
+		&op.ID, &op.Username, &op.PasswordHash, &op.Role, &op.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(op.PasswordHash), []byte(password)); err != nil {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	return op, nil
+}
+
+// ListOperators returns all operators (without password hashes).
+func (d *DB) ListOperators() ([]map[string]interface{}, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`SELECT id, username, role, created_at FROM operators ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var operators []map[string]interface{}
+	for rows.Next() {
+		var op OperatorRecord
+		if err := rows.Scan(&op.ID, &op.Username, &op.Role, &op.CreatedAt); err != nil {
+			return nil, err
+		}
+		operators = append(operators, map[string]interface{}{
+			"id":       op.ID,
+			"username": op.Username,
+			"role":     op.Role,
+			"created_at": op.CreatedAt,
+		})
+	}
+	return operators, rows.Err()
+}
+
+// DeleteOperator removes an operator by ID.
+func (d *DB) DeleteOperator(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`DELETE FROM operators WHERE id=?`, id)
+	return err
+}
+
+// --- Server secrets persistence ---
+
+// GetSecret retrieves a persisted server secret.
+func (d *DB) GetSecret(key string) ([]byte, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var value []byte
+	err := d.conn.QueryRow(`SELECT value FROM server_secrets WHERE key=?`, key).Scan(&value)
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// SetSecret stores a server secret.
+func (d *DB) SetSecret(key string, value []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`INSERT OR REPLACE INTO server_secrets (key, value) VALUES (?, ?)`, key, value)
+	return err
+}
+
+// --- Audit operations ---
+
+// LogAction records an operator action.
+func (d *DB) LogAction(operatorID int, action, detail string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`INSERT INTO audit_log (operator_id, action, detail) VALUES (?, ?, ?)`,
+		operatorID, action, detail)
+	return err
+}
+
+// --- Helpers ---
+
+func scanSessions(rows *sql.Rows) ([]SessionRecord, error) {
+	var sessions []SessionRecord
+	for rows.Next() {
+		var s SessionRecord
+		var isAdmin int
+		if err := rows.Scan(&s.ID, &s.AgentID, &s.Hostname, &s.OS, &s.Arch,
+			&s.Username, &isAdmin, &s.PublicIP, &s.LocalIP, &s.MACAddr,
+			&s.FirstSeen, &s.LastSeen, &s.State, &s.TaskCount); err != nil {
+			return nil, err
+		}
+		s.IsAdmin = isAdmin != 0
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+func scanTasks(rows *sql.Rows) ([]TaskRecord, error) {
+	var tasks []TaskRecord
+	for rows.Next() {
+		var t TaskRecord
+		var completedAt *time.Time
+		var success int
+		if err := rows.Scan(&t.ID, &t.SessionID, &t.Command, &t.Output,
+			&t.ExitCode, &success, &t.IssuedAt, &completedAt); err != nil {
+			return nil, err
+		}
+		t.Success = success != 0
+		t.CompletedAt = completedAt
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// Internal helpers
+func generateID(prefix string) string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("%s-%x", prefix, b)
+}
+
+// Ensure log is imported
+var _ = log.Default
