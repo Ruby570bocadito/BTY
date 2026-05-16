@@ -22,8 +22,14 @@ export default {
   mounted() { this.fetch(); this.timer = setInterval(() => this.fetch(), 10000) },
   beforeUnmount() { clearInterval(this.timer) },
   methods: {
-    auth() { const a = sessionStorage.getItem('bty_auth'); return a ? { Authorization: 'Basic ' + a } : {} },
-    async fetch() { try { const r = await fetch('/api/files', { headers: this.auth() }); this.files = await r.json() || [] } catch (e) {} },
+    auth() { const t = sessionStorage.getItem('bty_token'); return t ? { Authorization: 'Bearer ' + t } : {} },
+    async fetch() {
+      try {
+        const r = await fetch('/api/files', { headers: this.auth() })
+        if (r.status === 401) { this.$router.push('/login'); return }
+        this.files = await r.json() || []
+      } catch (e) { console.error('Failed to fetch files:', e) }
+    },
     fmtDate(d) { return d ? new Date(d).toLocaleString() : '—' },
     fmtSize(b) { if (!b) return '—'; return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : b > 1024 ? (b/1024).toFixed(0)+' KB' : b+' B' }
   }

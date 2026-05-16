@@ -67,11 +67,11 @@
         <option v-for="s in sessions" :key="s.ID" :value="s.ID">{{ s.Hostname }} ({{ s.Username }})</option>
       </select>
       <input v-model="cmd" @keyup.enter="execCmd" class="cmd-input" placeholder="command..." />
-      <button @click="execCmd" class="cmd-btn">Execute</button>
+      <button @click="execCmd" class="cmd-btn" :disabled="executing">{{ executing ? 'Executing...' : 'Execute' }}</button>
     </div>
 
     <!-- Command Output -->
-    <pre v-if="cmdOutput" class="cmd-output animate-in">{{ cmdOutput }}</pre>
+    <pre v-if="cmdOutput" class="cmd-output animate-in" :class="{'error-output': cmdError}">{{ cmdOutput }}</pre>
   </div>
 </template>
 
@@ -79,7 +79,7 @@
 export default {
   data() {
     return {
-      sessions: [], expanded: null, sessionTasks: [], cmd: '', targetAgent: '', cmdOutput: '', timer: null
+      sessions: [], expanded: null, sessionTasks: [], cmd: '', targetAgent: '', cmdOutput: '', cmdError: false, executing: false, timer: null
     }
   },
   computed: {
@@ -91,12 +91,21 @@ export default {
   },
   beforeUnmount() { clearInterval(this.timer) },
   methods: {
-    auth() { const a = sessionStorage.getItem('bty_auth'); return a ? { Authorization: 'Basic ' + a } : {} },
+    auth() {
+      const token = sessionStorage.getItem('bty_token')
+      return token ? { Authorization: 'Bearer ' + token } : {}
+    },
     async fetch() {
       try {
         const r = await fetch('/api/sessions', { headers: this.auth() })
+        if (r.status === 401) {
+          this.$router.push('/login')
+          return
+        }
         this.sessions = await r.json() || []
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to fetch sessions:', e)
+      }
     },
     async toggleExpand(id) {
       if (this.expanded === id) { this.expanded = null; return }
@@ -105,25 +114,54 @@ export default {
         const r = await fetch('/api/sessions/' + id, { headers: this.auth() })
         const d = await r.json()
         this.sessionTasks = d.tasks || []
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to fetch session tasks:', e)
+      }
     },
     async execCmd() {
-      if (!this.cmd) return
+      if (!this.cmd || this.executing) return
+      this.executing = true
+      this.cmdOutput = ''
+      this.cmdError = false
       const url = this.targetAgent ? '/api/cmd' : '/api/broadcast'
       const body = this.targetAgent
         ? JSON.stringify({ agent_id: this.targetAgent, command: this.cmd, timeout: 30 })
         : JSON.stringify({ command: this.cmd })
       try {
-        const r = await fetch(url, { method: 'POST', headers: { ...this.auth(), 'Content-Type': 'application/json' }, body })
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { ...this.auth(), 'Content-Type': 'application/json' },
+          body
+        })
+        if (r.status === 401) {
+          this.$router.push('/login')
+          return
+        }
         const j = await r.json()
-        this.cmdOutput = typeof j === 'string' ? j : (j.output || j.error_message || JSON.stringify(j, null, 2))
-      } catch (e) { this.cmdOutput = 'Error: ' + e.message }
+        if (!r.ok) {
+          this.cmdOutput = 'Error: ' + (j.error || r.statusText)
+          this.cmdError = true
+        } else {
+          this.cmdOutput = typeof j === 'string' ? j : (j.output || JSON.stringify(j, null, 2))
+        }
+      } catch (e) {
+        this.cmdOutput = 'Connection error: ' + e.message
+        this.cmdError = true
+      }
       this.cmd = ''
+      this.executing = false
     },
     async killSession(id) {
-      if (!confirm('Kill session?')) return
-      await fetch('/api/sessions/' + id, { method: 'DELETE', headers: this.auth() })
-      this.expanded = null; this.fetch()
+      if (!confirm('Kill this session?')) return
+      try {
+        const r = await fetch('/api/sessions/' + id, { method: 'DELETE', headers: this.auth() })
+        if (r.ok) {
+          this.expanded = null
+          this.fetch()
+        }
+      } catch (e) {
+        console.error('Failed to kill session:', e)
+      }
     },
     osClass(os) {
       const m = { linux: 'os-linux', windows: 'os-win', darwin: 'os-mac' }
@@ -174,7 +212,9 @@ export default {
 .cmd-input:focus{border-color:#059669}
 .cmd-btn{padding:8px 20px;background:#059669;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .2s}
 .cmd-btn:hover{background:#047857}
+.cmd-btn:disabled{opacity:.5;cursor:not-allowed}
 .cmd-output{margin-top:12px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#1f2937;max-height:300px;overflow-y:auto;white-space:pre-wrap}
+.cmd-output.error-output{background:#fef2f2;border-color:#fecaca;color:#dc2626}
 .animate-in{animation:fadeIn .3s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 </style>

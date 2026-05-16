@@ -30,6 +30,7 @@
         ref="input"
         v-model="command"
         @keyup.enter="execute"
+        @keydown="handleKeydown"
         :disabled="!connected || !selectedAgent"
         placeholder="Type command..."
         autofocus
@@ -59,12 +60,13 @@ export default {
   },
   methods: {
     auth() {
-      const a = sessionStorage.getItem('bty_auth')
-      return a ? { Authorization: 'Basic ' + a } : {}
+      const t = sessionStorage.getItem('bty_token')
+      return t ? { Authorization: 'Bearer ' + t } : {}
     },
     async loadAgents() {
       try {
         const r = await fetch('/api/sessions', { headers: this.auth() })
+        if (r.status === 401) { this.$router.push('/login'); return }
         if (r.ok) this.agents = await r.json()
       } catch (e) {
         console.error('Failed to load agents:', e)

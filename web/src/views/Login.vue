@@ -7,7 +7,7 @@
         <input v-model="user" placeholder="Operator" autocomplete="off" class="input" />
         <input v-model="pass" type="password" placeholder="Passphrase" class="input" />
         <p v-if="err" class="error">{{ err }}</p>
-        <button type="submit" class="btn" :disabled="loading">{{ loading ? '...' : 'Authenticate' }}</button>
+        <button type="submit" class="btn" :disabled="loading">{{ loading ? 'Connecting...' : 'Authenticate' }}</button>
       </form>
     </div>
   </div>
@@ -18,7 +18,8 @@ export default {
   data() { return { user: '', pass: '', loading: false, err: '' } },
   methods: {
     async login() {
-      this.loading = true; this.err = ''
+      this.loading = true
+      this.err = ''
       try {
         const r = await fetch('/api/login', {
           method: 'POST',
@@ -34,9 +35,12 @@ export default {
           sessionStorage.setItem('bty_expires', Date.now() + data.expires_in * 1000)
           this.$router.push('/sessions')
         } else {
-          this.err = 'Invalid credentials'
+          const body = await r.json().catch(() => null)
+          this.err = body?.error || 'Invalid credentials'
         }
-      } catch (e) { this.err = 'Connection failed' }
+      } catch (e) {
+        this.err = 'Cannot connect to server'
+      }
       this.loading = false
     }
   }

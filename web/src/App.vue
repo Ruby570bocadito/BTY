@@ -6,8 +6,10 @@
         <nav class="nav">
           <router-link to="/" class="nav-item" :class="{active:$route.path==='/'}">Dashboard</router-link>
           <router-link to="/sessions" class="nav-item" :class="{active:$route.path.startsWith('/sessions')}">Victims</router-link>
+          <router-link to="/terminal" class="nav-item" :class="{active:$route.path==='/terminal'}">Terminal</router-link>
           <router-link to="/modules" class="nav-item" :class="{active:$route.path==='/modules'}">Modules</router-link>
           <router-link to="/files" class="nav-item" :class="{active:$route.path==='/files'}">Files</router-link>
+          <router-link to="/operators" class="nav-item" :class="{active:$route.path==='/operators'}">Operators</router-link>
         </nav>
       </div>
       <div class="header-right">
@@ -17,6 +19,7 @@
           <span class="online-count">{{ status.sessions || 0 }}</span>
         </template>
         <span class="uptime" v-if="status.uptime">{{ formatUptime(status.uptime) }}</span>
+        <span class="user-badge">{{ user }} ({{ role }})</span>
         <button @click="logout" class="logout-btn">Logout</button>
       </div>
     </header>
@@ -43,13 +46,17 @@ export default {
       loading: true,
       connectionError: false,
       retryCount: 0,
-      maxRetries: 10
+      maxRetries: 10,
+      user: '',
+      role: ''
     }
   },
   computed: {
     isAuthed() { return !!sessionStorage.getItem('bty_token') }
   },
   mounted() {
+    this.user = sessionStorage.getItem('bty_user') || ''
+    this.role = sessionStorage.getItem('bty_role') || ''
     if (this.isAuthed) {
       this.fetch()
       this.timer = setInterval(() => this.fetch(), 5000)
@@ -131,6 +138,7 @@ body{font-family:'Inter',sans-serif;background:#f8f9fa;color:#1a1a2e}
 .online-dot{width:8px;height:8px;border-radius:50%;background:#10b981;animation:pulse 2s infinite}
 .online-count{font-size:13px;color:#6b7280;font-family:'JetBrains Mono',monospace}
 .uptime{font-size:12px;color:#9ca3af;font-family:'JetBrains Mono',monospace}
+.user-badge{font-size:12px;color:#6b7280;font-family:'JetBrains Mono',monospace;background:#f3f4f6;padding:3px 10px;border-radius:6px}
 .error-indicator{width:8px;height:8px;border-radius:50%;background:#ef4444;animation:pulse-error 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes pulse-error{0%,100%{opacity:1}50%{opacity:.2}}

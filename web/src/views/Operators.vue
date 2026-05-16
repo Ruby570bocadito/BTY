@@ -67,21 +67,17 @@ export default {
   },
   mounted() {
     this.loadOperators()
-    try {
-      const authData = JSON.parse(atob(sessionStorage.getItem('bty_auth').split('.')[1]))
-      this.currentUser = authData.sub || 'admin'
-    } catch (e) {
-      this.currentUser = 'admin'
-    }
+    this.currentUser = sessionStorage.getItem('bty_user') || 'admin'
   },
   methods: {
     auth() {
-      const a = sessionStorage.getItem('bty_auth')
-      return a ? { Authorization: 'Basic ' + a } : {}
+      const t = sessionStorage.getItem('bty_token')
+      return t ? { Authorization: 'Bearer ' + t } : {}
     },
     async loadOperators() {
       try {
         const r = await fetch('/api/operators', { headers: this.auth() })
+        if (r.status === 401) { this.$router.push('/login'); return }
         if (r.ok) this.operators = await r.json()
       } catch (e) {
         console.error('Failed to load operators:', e)

@@ -78,21 +78,23 @@ export default {
   },
   beforeUnmount() { clearInterval(this.timer) },
   methods: {
-    auth() { const a = sessionStorage.getItem('bty_auth'); return a ? { Authorization: 'Basic ' + a } : {} },
+    auth() { const t = sessionStorage.getItem('bty_token'); return t ? { Authorization: 'Bearer ' + t } : {} },
     async fetchAll() {
       await Promise.all([this.fetchModules(), this.fetchSessions()])
     },
     async fetchModules() {
       try {
         const r = await fetch('/api/modules', { headers: this.auth() })
+        if (r.status === 401) { this.$router.push('/login'); return }
         this.modules = await r.json() || []
-      } catch (e) {}
+      } catch (e) { console.error('Failed to fetch modules:', e) }
     },
     async fetchSessions() {
       try {
         const r = await fetch('/api/sessions', { headers: this.auth() })
+        if (r.status === 401) { this.$router.push('/login'); return }
         this.sessions = await r.json() || []
-      } catch (e) {}
+      } catch (e) { console.error('Failed to fetch sessions:', e) }
     },
     async pushModule(name) {
       const agentId = this.targetAgent[name]
