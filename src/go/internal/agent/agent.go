@@ -463,7 +463,7 @@ func (a *Agent) executeTask(task *proto.Task) *proto.TaskResult {
 		list := a.modules.List()
 		return &proto.TaskResult{
 			TaskId:  task.TaskId,
-			Output:  fmt.Sprintf("Available modules: %v\n\nUse: keylogger, screenshot, persistence, ps, sysinfo, netinfo, find:pattern", list),
+			Output:  fmt.Sprintf("Available modules: %v\n\nUse: keylogger, screenshot, persistence, ps, sysinfo, netinfo, find:pattern, clipboard, passhunt, browser, watch:interval, migrate:pid", list),
 			Success: true,
 		}
 	}
