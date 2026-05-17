@@ -137,10 +137,10 @@ func (v *CredentialVault) Search(query string) []Credential {
 	records, err := v.db.SearchCredentials(query)
 	if err != nil {
 		log.Printf("[VAULT] Failed to search credentials: %v", err)
-		return nil
+		return []Credential{}
 	}
 
-	var results []Credential
+	results := []Credential{}
 	for _, r := range records {
 		results = append(results, Credential{
 			ID:       r.ID,
@@ -162,10 +162,10 @@ func (v *CredentialVault) List() []Credential {
 	records, err := v.db.ListCredentials()
 	if err != nil {
 		log.Printf("[VAULT] Failed to list credentials: %v", err)
-		return nil
+		return []Credential{}
 	}
 
-	var results []Credential
+	results := []Credential{}
 	for _, r := range records {
 		results = append(results, Credential{
 			ID:       r.ID,
