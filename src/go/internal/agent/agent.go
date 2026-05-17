@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"bty/src/go/internal/crypto"
@@ -1216,7 +1217,11 @@ func generateAgentID() string {
 
 func isAdmin() bool {
 	if runtime.GOOS == "windows" {
-		return false
+		// Check Windows admin via shell32.IsUserAnAdmin
+		shell32 := syscall.NewLazyDLL("shell32.dll")
+		isUserAnAdmin := shell32.NewProc("IsUserAnAdmin")
+		ret, _, _ := isUserAnAdmin.Call()
+		return ret != 0
 	}
 	return os.Geteuid() == 0
 }
