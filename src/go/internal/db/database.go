@@ -600,6 +600,138 @@ func (d *DB) DeleteQueuedTask(id string) error {
 	return err
 }
 
+// --- Team collaboration ---
+
+// AddSessionNote adds a note to a session.
+func (d *DB) AddSessionNote(sessionID string, operatorID int, content string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	id := fmt.Sprintf("note-%x", time.Now().UnixNano())
+	_, err := d.conn.Exec(`INSERT INTO session_notes (id, session_id, operator_id, content) VALUES (?, ?, ?, ?)`,
+		id, sessionID, operatorID, content)
+	return err
+}
+
+// GetSessionNotes returns all notes for a session.
+func (d *DB) GetSessionNotes(sessionID string) ([]map[string]interface{}, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT sn.id, sn.content, sn.operator_id, o.username, sn.created_at
+		FROM session_notes sn
+		LEFT JOIN operators o ON sn.operator_id = o.id
+		WHERE sn.session_id=? ORDER BY sn.created_at ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []map[string]interface{}
+	for rows.Next() {
+		var id, content, username string
+		var operatorID int
+		var createdAt time.Time
+		if err := rows.Scan(&id, &content, &operatorID, &username, &createdAt); err != nil {
+			return nil, err
+		}
+		notes = append(notes, map[string]interface{}{
+			"id":          id,
+			"content":     content,
+			"operator_id": operatorID,
+			"username":    username,
+			"created_at":  createdAt,
+		})
+	}
+	return notes, rows.Err()
+}
+
+// LockSession locks a session for an operator.
+func (d *DB) LockSession(sessionID string, operatorID int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`INSERT OR REPLACE INTO session_locks (session_id, operator_id, locked_at) VALUES (?, ?, ?)`,
+		sessionID, operatorID, time.Now())
+	return err
+}
+
+// UnlockSession unlocks a session.
+func (d *DB) UnlockSession(sessionID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`DELETE FROM session_locks WHERE session_id=?`, sessionID)
+	return err
+}
+
+// GetSessionLock returns the operator who locked a session.
+func (d *DB) GetSessionLock(sessionID string) (*int, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var operatorID int
+	err := d.conn.QueryRow(`SELECT operator_id FROM session_locks WHERE session_id=?`, sessionID).Scan(&operatorID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &operatorID, err
+}
+
+// --- Agent profiles ---
+
+// CreateAgentProfile creates a new agent configuration profile.
+func (d *DB) CreateAgentProfile(id, name string, beaconInterval int, jitter float64, transport string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`INSERT INTO agent_profiles (id, name, beacon_interval, jitter, transport) VALUES (?, ?, ?, ?, ?)`,
+		id, name, beaconInterval, jitter, transport)
+	return err
+}
+
+// ListAgentProfiles returns all agent profiles.
+func (d *DB) ListAgentProfiles() ([]map[string]interface{}, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`SELECT id, name, beacon_interval, jitter, transport, created_at FROM agent_profiles ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var profiles []map[string]interface{}
+	for rows.Next() {
+		var id, name, transport string
+		var beaconInterval int
+		var jitter float64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &name, &beaconInterval, &jitter, &transport, &createdAt); err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, map[string]interface{}{
+			"id":              id,
+			"name":            name,
+			"beacon_interval": beaconInterval,
+			"jitter":          jitter,
+			"transport":       transport,
+			"created_at":      createdAt,
+		})
+	}
+	return profiles, rows.Err()
+}
+
+// DeleteAgentProfile removes an agent profile.
+func (d *DB) DeleteAgentProfile(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`DELETE FROM agent_profiles WHERE id=?`, id)
+	return err
+}
+
 // --- Audit operations ---
 
 // LogAction records an operator action.

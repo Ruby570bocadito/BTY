@@ -24,6 +24,8 @@ import (
 	"bty/src/go/internal/transport"
 	"bty/src/go/internal/module"
 	"bty/src/go/internal/auth"
+	"bty/src/go/internal/reporting"
+	"bty/src/go/internal/siem"
 	protobuf "google.golang.org/protobuf/proto"
 )
 
@@ -51,6 +53,8 @@ type Server struct {
 	portFwds    *PortFwdManager
 	tunnels     *TunnelManager
 	moduleStore *module.Store
+	reporter    *reporting.ReportGenerator
+	siem        *siem.SIEMForwarder
 
 	quit chan struct{}
 	wg   sync.WaitGroup
@@ -85,6 +89,8 @@ func New(cfg *config.Config, database *db.DB) *Server {
 		portFwds:     NewPortFwdManager(),
 		tunnels:      NewTunnelManager(),
 		moduleStore:  module.NewStore("modules", moduleHMACKey),
+		reporter:     reporting.NewReportGenerator("reports"),
+		siem:         siem.NewSIEMForwarder(1024),
 		quit:         make(chan struct{}),
 	}
 }
@@ -226,6 +232,11 @@ func (s *Server) acceptLoop(listener net.Listener, transportName string) {
 func (s *Server) Stop() {
 	log.Println("[C2] Shutting down all listeners...")
 	close(s.quit)
+
+	// Flush and stop SIEM forwarder
+	if s.siem != nil {
+		s.siem.Stop()
+	}
 
 	// Close all listeners first
 	for _, ln := range s.listeners {
@@ -1131,6 +1142,187 @@ func (s *Server) setupAPI() *http.ServeMux {
 		}
 		s.db.LogAction(0, "operator_delete", id)
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	}))))))
+
+	// --- Team collaboration ---
+
+	mux.HandleFunc("/api/notes", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			var req struct {
+				SessionID string `json:"session_id"`
+				Content   string `json:"content"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.SessionID == "" || req.Content == "" {
+				http.Error(w, "session_id and content required", 400)
+				return
+			}
+			s.db.AddSessionNote(req.SessionID, 0, req.Content)
+			json.NewEncoder(w).Encode(map[string]string{"status": "added"})
+			return
+		}
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			http.Error(w, "session_id required", 400)
+			return
+		}
+		notes, err := s.db.GetSessionNotes(sessionID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(notes)
+	})))))
+
+	mux.HandleFunc("/api/lock", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			SessionID string `json:"session_id"`
+			Action    string `json:"action"` // lock or unlock
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.SessionID == "" {
+			http.Error(w, "session_id required", 400)
+			return
+		}
+		if req.Action == "lock" {
+			s.db.LockSession(req.SessionID, 0)
+			json.NewEncoder(w).Encode(map[string]string{"status": "locked"})
+		} else {
+			s.db.UnlockSession(req.SessionID)
+			json.NewEncoder(w).Encode(map[string]string{"status": "unlocked"})
+		}
+	})))))
+
+	// --- Agent profiles ---
+
+	mux.HandleFunc("/api/profiles", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			var req struct {
+				Name          string  `json:"name"`
+				BeaconInterval int     `json:"beacon_interval"`
+				Jitter        float64 `json:"jitter"`
+				Transport     string  `json:"transport"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			id := fmt.Sprintf("profile-%x", time.Now().UnixNano())
+			if req.BeaconInterval == 0 {
+				req.BeaconInterval = 5
+			}
+			if req.Jitter == 0 {
+				req.Jitter = 0.3
+			}
+			if req.Transport == "" {
+				req.Transport = "tls"
+			}
+			s.db.CreateAgentProfile(id, req.Name, req.BeaconInterval, req.Jitter, req.Transport)
+			json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "created"})
+			return
+		}
+		profiles, err := s.db.ListAgentProfiles()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(profiles)
+	})))))
+
+	// --- Reporting ---
+
+	mux.HandleFunc("/api/report", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(func(w http.ResponseWriter, r *http.Request) {
+		format := r.URL.Query().Get("format")
+		if format == "" {
+			format = "text"
+		}
+
+		// Build report from database
+		sessions, _ := s.db.ListAllSessions()
+		creds, _ := s.db.ListCredentials()
+
+		report := &reporting.EngagementReport{
+			Title:     "BTY C2 Engagement Report",
+			Operator:  "admin",
+			StartDate: time.Now().Add(-24 * time.Hour),
+			EndDate:   time.Now(),
+			Summary: reporting.ReportSummary{
+				TotalSessions:    len(sessions),
+				ActiveSessions:   0,
+				TotalCredentials: len(creds),
+				UniqueOS:         make(map[string]int),
+			},
+		}
+
+		for _, s := range sessions {
+			report.Sessions = append(report.Sessions, reporting.SessionReport{
+				ID:        s.ID,
+				AgentID:   s.AgentID,
+				Hostname:  s.Hostname,
+				OS:        s.OS,
+				Arch:      s.Arch,
+				Username:  s.Username,
+				IsAdmin:   s.IsAdmin,
+				PublicIP:  s.PublicIP,
+				FirstSeen: s.FirstSeen,
+				LastSeen:  s.LastSeen,
+				State:     s.State,
+				TaskCount: s.TaskCount,
+			})
+			if s.State == "active" {
+				report.Summary.ActiveSessions++
+			}
+			report.Summary.UniqueOS[s.OS]++
+		}
+
+		for _, c := range creds {
+			report.Credentials = append(report.Credentials, reporting.CredentialReport{
+				Username: c.Username,
+				Password: c.Password,
+				Domain:   c.Domain,
+				Host:     c.Host,
+				Service:  c.Service,
+				Source:   c.Source,
+				Captured: c.Captured,
+			})
+		}
+
+		report.Summary.UniqueHosts = len(report.Summary.UniqueOS)
+
+		var path string
+		var err error
+		if format == "csv" {
+			path, err = s.reporter.GenerateCSV(report)
+		} else {
+			path, err = s.reporter.GenerateText(report)
+		}
+
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{"path": path, "status": "generated"})
+	})))))
+
+	// --- SIEM webhooks ---
+
+	mux.HandleFunc("/api/webhooks", cors(authMiddleware(adminOnly(auditWithLogging(RateLimitMiddleware(rateLimiter)(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			var req struct {
+				URL    string            `json:"url"`
+				Events []string          `json:"events"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.URL == "" {
+				http.Error(w, "url required", 400)
+				return
+			}
+			s.siem.AddWebhook(siem.WebhookConfig{
+				URL:    req.URL,
+				Events: req.Events,
+			})
+			json.NewEncoder(w).Encode(map[string]string{"status": "added"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))))))
 
 	// Serve SPA frontend from web/dist/ if it exists

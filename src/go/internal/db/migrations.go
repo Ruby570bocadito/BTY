@@ -177,6 +177,38 @@ func Migrations() []Migration {
 				DROP TABLE IF EXISTS task_queue;
 			`,
 		},
+		{
+			Version: 8,
+			Name:    "add_team_collaboration",
+			Up: `
+				CREATE TABLE IF NOT EXISTS session_notes (
+					id TEXT PRIMARY KEY,
+					session_id TEXT NOT NULL,
+					operator_id INTEGER,
+					content TEXT NOT NULL,
+					created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+				CREATE TABLE IF NOT EXISTS session_locks (
+					session_id TEXT PRIMARY KEY,
+					operator_id INTEGER NOT NULL,
+					locked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+				CREATE TABLE IF NOT EXISTS agent_profiles (
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					beacon_interval INTEGER DEFAULT 5,
+					jitter REAL DEFAULT 0.3,
+					transport TEXT DEFAULT 'tls',
+					created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+				CREATE INDEX IF NOT EXISTS idx_notes_session ON session_notes(session_id);
+			`,
+			Down: `
+				DROP TABLE IF EXISTS session_notes;
+				DROP TABLE IF EXISTS session_locks;
+				DROP TABLE IF EXISTS agent_profiles;
+			`,
+		},
 	}
 }
 
