@@ -60,6 +60,8 @@ export default {
     if (this.isAuthed) {
       this.fetch()
       this.timer = setInterval(() => this.fetch(), 5000)
+    } else {
+      this.loading = false
     }
   },
   beforeUnmount() { clearInterval(this.timer) },

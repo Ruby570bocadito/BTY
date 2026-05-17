@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 // AntiSandbox performs multiple checks to detect if running in a sandbox/VM.

@@ -2,20 +2,7 @@
 
 package evasion
 
-import (
-	"syscall"
-	"unsafe"
-)
-
-const (
-	PAGE_EXECUTE_READ = 0x20
-	PAGE_EXECUTE_READWRITE = 0x40
-)
-
-var (
-	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
-	procVirtualProtect       = kernel32.NewProc("VirtualProtect")
-)
+import "unsafe"
 
 // lockMemoryRegions changes memory protection from RWX to RX using VirtualProtect.
 func (sm *SleepMask) lockMemoryRegions() {

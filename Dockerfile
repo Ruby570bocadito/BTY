@@ -19,6 +19,7 @@ WORKDIR /app
 COPY --from=builder /bty-server .
 COPY --from=builder /bty-agent .
 COPY config.yaml .
+COPY web/dist ./web/dist
 
 RUN mkdir -p web/dist data loot modules
 

