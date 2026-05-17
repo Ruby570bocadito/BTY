@@ -1,6 +1,7 @@
 package c2
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/tls"
@@ -266,19 +267,23 @@ func (s *Server) acceptLoop(listener net.Listener, transportName string) {
 	}
 }
 
-// Stop gracefully shuts down the server.
+// Stop gracefully shuts down the server with a 30-second timeout.
 func (s *Server) Stop() {
 	log.Println("[C2] Shutting down all listeners...")
 	close(s.quit)
+
+	// Create a context with timeout for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Flush and stop SIEM forwarder
 	if s.siem != nil {
 		s.siem.Stop()
 	}
 
-	// Shutdown API server gracefully
+	// Shutdown API server gracefully with context
 	if s.apiServer != nil {
-		s.apiServer.Close()
+		s.apiServer.Shutdown(ctx)
 	}
 
 	// Close all listeners first
@@ -952,12 +957,25 @@ func (s *Server) setupAPI() *http.ServeMux {
 		json.NewEncoder(w).Encode(result)
 	}))))))
 
+	mux.HandleFunc("/api/cmd", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(requirePermission(auth.PermCommandsExecute)(func(w http.ResponseWriter, r *http.Request) {
+		validated, ok := ValidateCommandRequest(w, r)
+		if !ok {
+			return
+		}
+		result, err := s.CreateTaskWithContext(r.Context(), validated.AgentID, validated.Command, validated.Timeout)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+	}))))))
+
 	mux.HandleFunc("/api/broadcast", cors(authMiddleware(auditWithLogging(RateLimitMiddleware(rateLimiter)(requirePermission(auth.PermCommandsBroadcast)(func(w http.ResponseWriter, r *http.Request) {
 		command, ok := ValidateBroadcastRequest(w, r)
 		if !ok {
 			return
 		}
-		results := s.BroadcastTask(command)
+		results := s.BroadcastTaskWithContext(r.Context(), command)
 		json.NewEncoder(w).Encode(results)
 	}))))))
 

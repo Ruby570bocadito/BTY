@@ -16,6 +16,7 @@ import (
 type DB struct {
 	conn *sql.DB
 	mu   sync.RWMutex
+	enc  *Encryptor // AES-256-GCM encryptor for sensitive columns
 }
 
 // SessionRecord represents a stored session.
@@ -88,6 +89,11 @@ type QueuedTask struct {
 
 // Open opens (or creates) a SQLite database at the given path.
 func Open(dsn string) (*DB, error) {
+	return OpenWithEncryption(dsn, nil)
+}
+
+// OpenWithEncryption opens a database with optional AES-256-GCM encryption for sensitive columns.
+func OpenWithEncryption(dsn string, masterKey []byte) (*DB, error) {
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -100,6 +106,17 @@ func Open(dsn string) (*DB, error) {
 	conn.SetConnMaxLifetime(30 * time.Minute)
 
 	db := &DB{conn: conn}
+
+	// Initialize encryptor if master key provided
+	if len(masterKey) > 0 {
+		enc, err := NewEncryptor(masterKey)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("create encryptor: %w", err)
+		}
+		db.enc = enc
+		log.Println("[DB] At-rest encryption enabled (AES-256-GCM)")
+	}
 
 	// Enable WAL mode and other performance optimizations
 	if err := db.configureSQLite(); err != nil {
@@ -419,7 +436,7 @@ func (d *DB) DeleteOperator(id string) error {
 
 // --- Server secrets persistence ---
 
-// GetSecret retrieves a persisted server secret.
+// GetSecret retrieves a persisted server secret (decrypts if encryption is enabled).
 func (d *DB) GetSecret(key string) ([]byte, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -429,33 +446,63 @@ func (d *DB) GetSecret(key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if d.enc != nil {
+		dec, err := d.enc.Decrypt(string(value))
+		if err != nil {
+			// Fallback: return raw value if decryption fails (legacy data)
+			return value, nil
+		}
+		return dec, nil
+	}
+
 	return value, nil
 }
 
-// SetSecret stores a server secret.
+// SetSecret stores a server secret (encrypted if encryption is enabled).
 func (d *DB) SetSecret(key string, value []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	_, err := d.conn.Exec(`INSERT OR REPLACE INTO server_secrets (key, value) VALUES (?, ?)`, key, value)
+	stored := value
+	if d.enc != nil {
+		enc, err := d.enc.Encrypt(value)
+		if err != nil {
+			return fmt.Errorf("encrypt secret: %w", err)
+		}
+		stored = []byte(enc)
+	}
+
+	_, err := d.conn.Exec(`INSERT OR REPLACE INTO server_secrets (key, value) VALUES (?, ?)`, key, stored)
 	return err
 }
 
 // --- Credential vault operations (SQLite-backed) ---
 
-// AddCredential stores a credential in the database.
+// AddCredential stores a credential in the database (encrypted if enabled).
 func (d *DB) AddCredential(c *CredentialRecord) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	password := c.Password
+	notes := c.Notes
+	if d.enc != nil {
+		if p, err := d.enc.EncryptString(c.Password); err == nil {
+			password = p
+		}
+		if n, err := d.enc.EncryptString(c.Notes); err == nil {
+			notes = n
+		}
+	}
+
 	_, err := d.conn.Exec(`
 		INSERT INTO credentials (id, username, password, domain, host, service, source, notes, captured)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.Username, c.Password, c.Domain, c.Host, c.Service, c.Source, c.Notes, c.Captured)
+		c.ID, c.Username, password, c.Domain, c.Host, c.Service, c.Source, notes, c.Captured)
 	return err
 }
 
-// ListCredentials returns all credentials.
+// ListCredentials returns all credentials (decrypted if encryption is enabled).
 func (d *DB) ListCredentials() ([]CredentialRecord, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -474,22 +521,27 @@ func (d *DB) ListCredentials() ([]CredentialRecord, error) {
 		if err := rows.Scan(&c.ID, &c.Username, &c.Password, &c.Domain, &c.Host, &c.Service, &c.Source, &c.Notes, &c.Captured); err != nil {
 			return nil, err
 		}
+		if d.enc != nil {
+			if p, err := d.enc.DecryptString(c.Password); err == nil {
+				c.Password = p
+			}
+			if n, err := d.enc.DecryptString(c.Notes); err == nil {
+				c.Notes = n
+			}
+		}
 		creds = append(creds, c)
 	}
 	return creds, rows.Err()
 }
 
-// SearchCredentials searches credentials by keyword.
+// SearchCredentials searches credentials by keyword (searches encrypted data).
 func (d *DB) SearchCredentials(query string) ([]CredentialRecord, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	pattern := "%" + query + "%"
 	rows, err := d.conn.Query(`
 		SELECT id, username, password, domain, host, service, source, notes, captured
-		FROM credentials
-		WHERE username LIKE ? OR domain LIKE ? OR host LIKE ? OR service LIKE ? OR source LIKE ?
-		ORDER BY captured DESC`, pattern, pattern, pattern, pattern, pattern)
+		FROM credentials ORDER BY captured DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +553,20 @@ func (d *DB) SearchCredentials(query string) ([]CredentialRecord, error) {
 		if err := rows.Scan(&c.ID, &c.Username, &c.Password, &c.Domain, &c.Host, &c.Service, &c.Source, &c.Notes, &c.Captured); err != nil {
 			return nil, err
 		}
-		creds = append(creds, c)
+		if d.enc != nil {
+			if p, err := d.enc.DecryptString(c.Password); err == nil {
+				c.Password = p
+			}
+			if n, err := d.enc.DecryptString(c.Notes); err == nil {
+				c.Notes = n
+			}
+		}
+		// Client-side search since data is encrypted
+		if containsStr(c.Username, query) || containsStr(c.Domain, query) ||
+			containsStr(c.Host, query) || containsStr(c.Service, query) ||
+			containsStr(c.Source, query) || containsStr(c.Notes, query) {
+			creds = append(creds, c)
+		}
 	}
 	return creds, rows.Err()
 }
@@ -804,6 +869,19 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && indexStr(s, substr) >= 0
+}
+
+func indexStr(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // Internal helpers
