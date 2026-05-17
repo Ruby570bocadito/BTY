@@ -57,6 +57,35 @@ type OperatorRecord struct {
 	CreatedAt    time.Time
 }
 
+// CredentialRecord represents a stored credential.
+type CredentialRecord struct {
+	ID       string
+	Username string
+	Password string
+	Domain   string
+	Host     string
+	Service  string
+	Source   string
+	Notes    string
+	Captured time.Time
+}
+
+// QueuedTask represents a task in the offline queue.
+type QueuedTask struct {
+	ID          string
+	SessionID   string
+	Command     string
+	Status      string // pending, delivered, completed, failed
+	Result      string
+	ExitCode    int
+	Success     bool
+	CreatedAt   time.Time
+	DeliveredAt *time.Time
+	CompletedAt *time.Time
+	OperatorID  *int
+	TimeoutSec  int
+}
+
 // Open opens (or creates) a SQLite database at the given path.
 func Open(dsn string) (*DB, error) {
 	conn, err := sql.Open("sqlite", dsn)
@@ -412,6 +441,165 @@ func (d *DB) SetSecret(key string, value []byte) error {
 	return err
 }
 
+// --- Credential vault operations (SQLite-backed) ---
+
+// AddCredential stores a credential in the database.
+func (d *DB) AddCredential(c *CredentialRecord) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`
+		INSERT INTO credentials (id, username, password, domain, host, service, source, notes, captured)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.Username, c.Password, c.Domain, c.Host, c.Service, c.Source, c.Notes, c.Captured)
+	return err
+}
+
+// ListCredentials returns all credentials.
+func (d *DB) ListCredentials() ([]CredentialRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, username, password, domain, host, service, source, notes, captured
+		FROM credentials ORDER BY captured DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var creds []CredentialRecord
+	for rows.Next() {
+		var c CredentialRecord
+		if err := rows.Scan(&c.ID, &c.Username, &c.Password, &c.Domain, &c.Host, &c.Service, &c.Source, &c.Notes, &c.Captured); err != nil {
+			return nil, err
+		}
+		creds = append(creds, c)
+	}
+	return creds, rows.Err()
+}
+
+// SearchCredentials searches credentials by keyword.
+func (d *DB) SearchCredentials(query string) ([]CredentialRecord, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	pattern := "%" + query + "%"
+	rows, err := d.conn.Query(`
+		SELECT id, username, password, domain, host, service, source, notes, captured
+		FROM credentials
+		WHERE username LIKE ? OR domain LIKE ? OR host LIKE ? OR service LIKE ? OR source LIKE ?
+		ORDER BY captured DESC`, pattern, pattern, pattern, pattern, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var creds []CredentialRecord
+	for rows.Next() {
+		var c CredentialRecord
+		if err := rows.Scan(&c.ID, &c.Username, &c.Password, &c.Domain, &c.Host, &c.Service, &c.Source, &c.Notes, &c.Captured); err != nil {
+			return nil, err
+		}
+		creds = append(creds, c)
+	}
+	return creds, rows.Err()
+}
+
+// DeleteCredential removes a credential by ID.
+func (d *DB) DeleteCredential(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`DELETE FROM credentials WHERE id=?`, id)
+	return err
+}
+
+// CountCredentials returns the number of stored credentials.
+func (d *DB) CountCredentials() (int, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var count int
+	err := d.conn.QueryRow(`SELECT COUNT(*) FROM credentials`).Scan(&count)
+	return count, err
+}
+
+// --- Task queue operations (offline task support) ---
+
+// QueueTask adds a task to the offline queue.
+func (d *DB) QueueTask(t *QueuedTask) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`
+		INSERT INTO task_queue (id, session_id, command, status, timeout_sec, operator_id)
+		VALUES (?, ?, ?, 'pending', ?, ?)`,
+		t.ID, t.SessionID, t.Command, t.TimeoutSec, t.OperatorID)
+	return err
+}
+
+// GetPendingTasks returns all pending tasks for a session.
+func (d *DB) GetPendingTasks(sessionID string) ([]QueuedTask, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, session_id, command, status, result, exit_code, success, created_at, delivered_at, completed_at, operator_id, timeout_sec
+		FROM task_queue WHERE session_id=? AND status='pending' ORDER BY created_at ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanQueuedTasks(rows)
+}
+
+// MarkTaskDelivered marks a task as delivered to the agent.
+func (d *DB) MarkTaskDelivered(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`UPDATE task_queue SET status='delivered', delivered_at=? WHERE id=?`, time.Now(), id)
+	return err
+}
+
+// CompleteTask marks a queued task as completed with result.
+func (d *DB) CompleteTask(id, result string, exitCode int, success bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`
+		UPDATE task_queue SET status=?, result=?, exit_code=?, success=?, completed_at=? WHERE id=?`,
+		map[bool]string{true: "completed", false: "failed"}[success], result, exitCode, boolToInt(success), time.Now(), id)
+	return err
+}
+
+// ListQueuedTasks returns all queued tasks for a session.
+func (d *DB) ListQueuedTasks(sessionID string) ([]QueuedTask, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.conn.Query(`
+		SELECT id, session_id, command, status, result, exit_code, success, created_at, delivered_at, completed_at, operator_id, timeout_sec
+		FROM task_queue WHERE session_id=? ORDER BY created_at DESC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanQueuedTasks(rows)
+}
+
+// DeleteQueuedTask removes a task from the queue.
+func (d *DB) DeleteQueuedTask(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec(`DELETE FROM task_queue WHERE id=?`, id)
+	return err
+}
+
 // --- Audit operations ---
 
 // LogAction records an operator action.
@@ -454,6 +642,26 @@ func scanTasks(rows *sql.Rows) ([]TaskRecord, error) {
 		}
 		t.Success = success != 0
 		t.CompletedAt = completedAt
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func scanQueuedTasks(rows *sql.Rows) ([]QueuedTask, error) {
+	var tasks []QueuedTask
+	for rows.Next() {
+		var t QueuedTask
+		var deliveredAt, completedAt *time.Time
+		var operatorID *int
+		var success int
+		if err := rows.Scan(&t.ID, &t.SessionID, &t.Command, &t.Status, &t.Result,
+			&t.ExitCode, &success, &t.CreatedAt, &deliveredAt, &completedAt, &operatorID, &t.TimeoutSec); err != nil {
+			return nil, err
+		}
+		t.Success = success != 0
+		t.DeliveredAt = deliveredAt
+		t.CompletedAt = completedAt
+		t.OperatorID = operatorID
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()

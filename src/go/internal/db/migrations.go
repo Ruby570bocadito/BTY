@@ -152,6 +152,31 @@ func Migrations() []Migration {
 				DROP TABLE IF EXISTS server_secrets;
 			`,
 		},
+		{
+			Version: 7,
+			Name:    "add_task_queue",
+			Up: `
+				CREATE TABLE IF NOT EXISTS task_queue (
+					id TEXT PRIMARY KEY,
+					session_id TEXT NOT NULL,
+					command TEXT NOT NULL,
+					status TEXT DEFAULT 'pending',
+					result TEXT DEFAULT '',
+					exit_code INTEGER DEFAULT 0,
+					success INTEGER DEFAULT 0,
+					created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+					delivered_at DATETIME,
+					completed_at DATETIME,
+					operator_id INTEGER,
+					timeout_sec INTEGER DEFAULT 30
+				);
+				CREATE INDEX IF NOT EXISTS idx_task_queue_session ON task_queue(session_id);
+				CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status);
+			`,
+			Down: `
+				DROP TABLE IF EXISTS task_queue;
+			`,
+		},
 	}
 }
 

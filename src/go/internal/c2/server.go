@@ -80,7 +80,7 @@ func New(cfg *config.Config, database *db.DB) *Server {
 		tokenManager: auth.NewTokenManager(jwtSecret, 12*time.Hour),
 		rbac:         auth.NewRBAC(),
 		socks5:       NewSOCKS5Manager(),
-		vault:        NewCredentialVault(),
+		vault:        NewCredentialVault(database),
 		files:        NewFileManager("loot"),
 		portFwds:     NewPortFwdManager(),
 		tunnels:      NewTunnelManager(),
